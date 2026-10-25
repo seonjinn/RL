@@ -250,15 +250,41 @@ class SequencePackingFusionLossWrapper:
         )
 
 
-class ZeroGradientTouchWrapper:
+class _ZeroGradientAnchor(torch.autograd.Function):
+    """Pass the loss through and give each parameter an all-zero gradient.
+
+    The forward does not read the parameter values, so non-finite or empty
+    parameters, or parameters with an all-gather in flight, are safe.
+    """
+
+    @staticmethod
+    def forward(
+        ctx: Any, loss: torch.Tensor, *parameters: torch.Tensor
+    ) -> torch.Tensor:
+        ctx.parameter_specs = [
+            (parameter.shape, parameter.dtype, parameter.device)
+            for parameter in parameters
+        ]
+        return loss.clone()
+
+    @staticmethod
+    def backward(ctx: Any, grad_loss: torch.Tensor) -> tuple[torch.Tensor, ...]:
+        zero_grads = tuple(
+            torch.zeros(shape, dtype=dtype, device=device)
+            for shape, dtype, device in ctx.parameter_specs
+        )
+        return (grad_loss, *zero_grads)
+
+
+class ZeroGradientWrapper:
     """Give parameters that the loss does not use an all-zero gradient.
 
     Megatron DDP with ``overlap_grad_reduce`` dispatches a gradient bucket only
     after every parameter in it reports a gradient, and ``finish_grad_sync``
     fails on a bucket that was never dispatched. A step that skips a trainable
     submodule, such as a paused draft model, leaves its buckets incomplete.
-    Adding ``0 * p[0]`` for each such parameter fires its gradient hook with an
-    all-zero gradient.
+    The wrapper anchors the loss to these parameters, so the backward pass
+    fires their gradient hooks with all-zero gradients.
     """
 
     def __init__(
@@ -267,7 +293,7 @@ class ZeroGradientTouchWrapper:
         parameters: Sequence[torch.nn.Parameter],
     ):
         if not parameters:
-            raise ValueError("ZeroGradientTouchWrapper needs at least one parameter")
+            raise ValueError("ZeroGradientWrapper needs at least one parameter")
         self.loss_fn = loss_fn
         self.parameters = tuple(parameters)
 
@@ -275,10 +301,7 @@ class ZeroGradientTouchWrapper:
         self, *args: Any, **kwargs: Any
     ) -> tuple[torch.Tensor, dict[str, Any]]:
         loss, metrics = self.loss_fn(*args, **kwargs)
-        touch = torch.stack(
-            [parameter.reshape(-1)[0].float() for parameter in self.parameters]
-        ).sum()
-        return loss + 0.0 * touch.to(loss.dtype), metrics
+        return _ZeroGradientAnchor.apply(loss, *self.parameters), metrics
 
 
 class DraftLossWrapper:

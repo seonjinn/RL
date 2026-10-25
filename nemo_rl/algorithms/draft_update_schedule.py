@@ -16,8 +16,13 @@
 The trainer calls ``observe`` with the rollout metrics of a step and then
 ``begin_step`` before the policy update. The scheduler pauses or resumes the
 draft update on the policy workers only when its decision changes.
+
+The scheduler state is not saved in checkpoints. A resumed run starts with
+the draft update enabled.
 """
 
+import logging
+import math
 from collections.abc import Mapping
 from typing import Any, Protocol
 
@@ -29,6 +34,8 @@ from nemo_rl.models.policy.draft_config import (
 
 ACCEPTANCE_LENGTH_METRIC = "vllm/spec_acceptance_length"
 NUM_DRAFTS_METRIC = "vllm/spec_num_drafts"
+
+log = logging.getLogger(__name__)
 
 
 class DraftUpdateTarget(Protocol):
@@ -67,6 +74,12 @@ class AcceptanceDraftUpdatePolicy:
     ``min_gain``, it pauses the draft. A paused draft resumes when the
     acceptance length falls by ``drift_tolerance`` below its value at the
     pause, or after ``max_skip_steps`` paused steps.
+
+    A resume clears the best value. The acceptance length at the resume then
+    sets a new reference, so the next pause needs ``patience`` more
+    observations without gain. A best value kept from before the pause would
+    count every recovering observation as stale and pause the draft again
+    before it recovers.
     """
 
     def __init__(self, schedule: AcceptanceDraftUpdateSchedule):
@@ -131,15 +144,44 @@ class DraftUpdateScheduler:
         self.policy = policy
         # Workers start with draft updates enabled.
         self.enabled = True
+        self._decided_step: int | None = None
+        self._warned_missing_metrics = False
 
     def observe(self, metrics: Mapping[str, Any]) -> None:
-        """Record the rollout acceptance length of one step, if the step drafted."""
-        if float(metrics.get(NUM_DRAFTS_METRIC, 0.0)) <= 0:
+        """Record the rollout acceptance length of one step, if the step drafted.
+
+        With async rollouts, these metrics come from generations of an older
+        policy, so the decision lags the draft weights by the rollout lag.
+        """
+        if ACCEPTANCE_LENGTH_METRIC not in metrics or NUM_DRAFTS_METRIC not in metrics:
+            if (
+                isinstance(self.policy, AcceptanceDraftUpdatePolicy)
+                and not self._warned_missing_metrics
+            ):
+                log.warning(
+                    "The acceptance draft update schedule found no %s or %s in "
+                    "the rollout metrics. The draft keeps its current update state.",
+                    ACCEPTANCE_LENGTH_METRIC,
+                    NUM_DRAFTS_METRIC,
+                )
+                self._warned_missing_metrics = True
             return
-        self.policy.observe(float(metrics[ACCEPTANCE_LENGTH_METRIC]))
+        if float(metrics[NUM_DRAFTS_METRIC]) <= 0:
+            return
+        acceptance_length = float(metrics[ACCEPTANCE_LENGTH_METRIC])
+        if not math.isfinite(acceptance_length):
+            return
+        self.policy.observe(acceptance_length)
 
     def begin_step(self, step: int) -> None:
-        """Pause or resume the draft update before the policy update of ``step``."""
+        """Pause or resume the draft update before the policy update of ``step``.
+
+        A repeated call for the same step keeps the first decision, so a
+        retried step does not count as an extra paused step.
+        """
+        if step == self._decided_step:
+            return
+        self._decided_step = step
         enabled = self.policy.should_update(step)
         if enabled != self.enabled:
             self.target.set_draft_update(enabled)

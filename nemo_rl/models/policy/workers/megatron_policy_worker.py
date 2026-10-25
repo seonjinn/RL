@@ -142,15 +142,20 @@ from nemo_rl.models.megatron.setup import (
 from nemo_rl.models.megatron.train import (
     LogprobsPostProcessor,
     LossPostProcessor,
+    SkippedParameters,
     TeacherFullPayloadPostProcessor,
     TopkLogitsPostProcessor,
     aggregate_training_statistics,
     megatron_forward_backward,
     should_reduce_loss_across_context_parallel,
+    skipped_parameters,
     strip_context_parallel_local_loss_metric,
 )
 from nemo_rl.models.policy import PolicyConfig
-from nemo_rl.models.policy.draft_config import draft_refit_enabled
+from nemo_rl.models.policy.draft_config import (
+    draft_refit_enabled,
+    draft_update_can_pause,
+)
 from nemo_rl.models.policy.interfaces import (
     ColocatablePolicyInterface,
     LogprobOutputSpec,
@@ -399,8 +404,8 @@ class _DraftTrainInputs:
     model: MegatronModule | None
     provider: DraftTrainingProvider | None
     capture_hidden_states: bool
-    # Draft parameters that a paused step leaves out of the loss.
-    zero_gradient_parameters: tuple[torch.nn.Parameter, ...]
+    # Draft parameters that a paused step leaves out of the forward pass.
+    skipped_parameters: SkippedParameters | None
 
 
 def _should_use_router_replay(
@@ -1243,6 +1248,10 @@ class MegatronPolicyWorkerImpl(
         param_sync_func = model_and_optimizer_state.param_sync_func
         self.draft_model = model_and_optimizer_state.draft_model
         self._draft_update_enabled = True
+        self._skipped_draft_parameters: SkippedParameters | None = None
+        if init_optimizer and draft_update_can_pause(config.get("draft")):
+            # Fail at startup, not at the first paused step.
+            self._skipped_draft_parameters = self._prepare_draft_update_pause()
         self._colocated_reshard_plan = model_and_optimizer_state.colocated_reshard_plan
         log_gpu_memory_diagnostics(
             label="after_model_setup", worker_type="MegatronPolicyWorker"
@@ -1585,29 +1594,31 @@ class MegatronPolicyWorkerImpl(
         """
         if getattr(self, "_train_step_state", None) is not None:
             raise RuntimeError("cannot change draft updates while a train step is open")
-        if not enabled:
-            if getattr(self, "draft_provider", None) is None:
-                raise ValueError(
-                    "pausing draft updates requires a Megatron DFlash or DSpark "
-                    "draft model"
-                )
-            if self._paused_draft_parameters() and not (
-                parallel_state.is_pipeline_last_stage(ignore_virtual=True)
-            ):
-                raise NotImplementedError(
-                    "pausing draft updates requires the draft model on the last "
-                    "pipeline stage"
-                )
-            # Fail at the pause request, not inside the next optimizer step.
-            draft_param_groups(self.optimizer)
+        if not enabled and self._skipped_draft_parameters is None:
+            self._skipped_draft_parameters = self._prepare_draft_update_pause()
         self._draft_update_enabled = enabled
 
-    def _paused_draft_parameters(self) -> tuple[torch.nn.Parameter, ...]:
-        return tuple(
+    def _prepare_draft_update_pause(self) -> SkippedParameters:
+        """Check that a train step can skip the draft, and collect its parameters."""
+        if getattr(self, "draft_provider", None) is None:
+            raise ValueError(
+                "pausing draft updates requires a Megatron DFlash or DSpark draft model"
+            )
+        draft_parameters = tuple(
             parameter
             for parameter in self.model.parameters()
             if parameter.requires_grad and is_draft_parameter(parameter)
         )
+        if draft_parameters and not parallel_state.is_pipeline_last_stage(
+            ignore_virtual=True
+        ):
+            raise NotImplementedError(
+                "pausing draft updates requires the draft model on the last "
+                "pipeline stage"
+            )
+        # Raises when a param group mixes draft and policy parameters.
+        draft_param_groups(self.optimizer)
+        return skipped_parameters(self.model, draft_parameters)
 
     def _draft_train_inputs(self) -> _DraftTrainInputs:
         draft_enabled = "draft" in self.cfg and self.cfg["draft"].enabled
@@ -1616,19 +1627,19 @@ class MegatronPolicyWorkerImpl(
                 model=self.draft_model,
                 provider=getattr(self, "draft_provider", None),
                 capture_hidden_states=draft_enabled,
-                zero_gradient_parameters=(),
+                skipped_parameters=None,
             )
         return _DraftTrainInputs(
             model=None,
             provider=None,
             capture_hidden_states=False,
-            zero_gradient_parameters=self._paused_draft_parameters(),
+            skipped_parameters=self._skipped_draft_parameters,
         )
 
     def _optimizer_step_context(self) -> AbstractContextManager[None]:
         if self._draft_update_enabled:
             return nullcontext()
-        return frozen_param_groups(draft_param_groups(self.optimizer))
+        return frozen_param_groups(self.optimizer, draft_param_groups(self.optimizer))
 
     @wrap_with_nvtx_name("megatron_policy_worker/train")
     def train(
@@ -1785,7 +1796,7 @@ class MegatronPolicyWorkerImpl(
                     teacher_output_layer_weight_by_index=self._opd_full_teacher_lm_heads,
                     draft_provider=draft_provider,
                     draft_normalization_counts=draft_normalization_counts,
-                    zero_gradient_parameters=draft_inputs.zero_gradient_parameters,
+                    skipped_parameters=draft_inputs.skipped_parameters,
                 )
 
                 rerun_state_machine = get_rerun_state_machine()
@@ -1901,8 +1912,13 @@ class MegatronPolicyWorkerImpl(
                     # Draft params are tagged with their own grad-norm group
                     # (see build_draft_model) and clipped separately from the
                     # policy so their large early gradients don't shrink the
-                    # policy update. None when no draft model is attached.
-                    draft_grad_norm = self.optimizer.grad_norms_by_group.get("draft")
+                    # policy update. None when no draft model is attached or
+                    # the draft update is paused.
+                    draft_grad_norm = (
+                        self.optimizer.grad_norms_by_group.get("draft")
+                        if self._draft_update_enabled
+                        else None
+                    )
                 else:
                     update_successful, grad_norm, num_zeros_in_grad = (True, 0.0, 0.0)
                     mtp_grad_norm = None
@@ -2500,7 +2516,7 @@ class MegatronPolicyWorkerImpl(
             draft_provider=draft_inputs.provider,
             defer_draft_normalization=True,
             teacher_output_layer_weight_by_index=self._opd_full_teacher_lm_heads,
-            zero_gradient_parameters=draft_inputs.zero_gradient_parameters,
+            skipped_parameters=draft_inputs.skipped_parameters,
         )
 
         # Placeholder N=1: loss returns un-normalized sums. ``backward``

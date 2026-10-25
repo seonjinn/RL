@@ -2493,3 +2493,99 @@ class TestAggregateTrainingStatistics:
         )
 
         assert grad_enabled_during_all_reduce == [False]
+
+
+def _ddp_model(
+    param_to_bucket_group: dict, *, overlap_param_gather: bool, hooks: bool
+) -> MagicMock:
+    from megatron.core.distributed import DistributedDataParallel
+
+    model = MagicMock(spec=DistributedDataParallel)
+    model.param_to_bucket_group = param_to_bucket_group
+    model.ddp_config = SimpleNamespace(overlap_param_gather=overlap_param_gather)
+    if hooks:
+        model.remove_forward_pre_hook_handles = {"module": MagicMock()}
+    return model
+
+
+class TestSkippedParameters:
+    def test_finish_param_sync_waits_once_per_bucket_group(self):
+        """Catches a paused draft whose in-flight all-gather blocks the next step."""
+        from nemo_rl.models.megatron.train import skipped_parameters
+
+        first, second, third = (torch.nn.Parameter(torch.ones(1)) for _ in range(3))
+        model = _ddp_model(
+            {first: "group_a", second: "group_a", third: "group_b"},
+            overlap_param_gather=True,
+            hooks=True,
+        )
+
+        skipped = skipped_parameters(model, [first, second, third])
+        skipped.finish_param_sync()
+
+        assert skipped.parameters == (first, second, third)
+        calls = model._finish_param_sync_for_bucket_group.call_args_list
+        assert [call.args for call in calls] == [("group_a",), ("group_b",)]
+
+    @pytest.mark.parametrize(
+        ("overlap_param_gather", "hooks"), [(False, True), (True, False)]
+    )
+    def test_finish_param_sync_is_noop_without_forward_pre_hooks(
+        self, overlap_param_gather: bool, hooks: bool
+    ):
+        from nemo_rl.models.megatron.train import skipped_parameters
+
+        parameter = torch.nn.Parameter(torch.ones(1))
+        model = _ddp_model(
+            {parameter: "group"},
+            overlap_param_gather=overlap_param_gather,
+            hooks=hooks,
+        )
+
+        skipped_parameters(model, [parameter]).finish_param_sync()
+
+        model._finish_param_sync_for_bucket_group.assert_not_called()
+
+    def test_non_ddp_model_has_noop_finish_param_sync(self):
+        from nemo_rl.models.megatron.train import skipped_parameters
+
+        parameter = torch.nn.Parameter(torch.ones(1))
+
+        skipped = skipped_parameters(torch.nn.Linear(1, 1), [parameter])
+        skipped.finish_param_sync()
+
+        assert skipped.parameters == (parameter,)
+
+    def test_loss_post_processor_covers_skipped_parameters(self):
+        from nemo_rl.algorithms.loss import NLLLossFn
+        from nemo_rl.models.megatron import train as megatron_train
+
+        parameter = torch.nn.Parameter(torch.full((2,), float("nan")))
+        finish_param_sync = MagicMock()
+        processor = megatron_train.LossPostProcessor(
+            loss_fn=NLLLossFn(),
+            cfg={"sequence_packing": {"enabled": True}},
+            num_microbatches=4,
+            skipped_parameters=megatron_train.SkippedParameters(
+                (parameter,), finish_param_sync=finish_param_sync
+            ),
+        )
+        data = MagicMock()
+        data.__contains__.side_effect = lambda key: key == "sample_mask"
+        data.__getitem__.side_effect = lambda key: torch.tensor([1.0])
+
+        with patch.object(
+            megatron_train, "get_context_parallel_world_size", return_value=2
+        ):
+            wrapped = processor(
+                data_dict=data,
+                global_valid_toks=torch.tensor(6.0),
+                prepacked_loss_mask=torch.tensor([[1.0, 0.0, 1.0, 0.0]]),
+            )
+        loss, _ = wrapped(torch.tensor([[1.0, 2.0, 3.0, 4.0]]))
+        expected_loss, _ = _run_direct_model_loss()
+        loss.backward()
+
+        finish_param_sync.assert_called_once_with()
+        assert torch.equal(loss, expected_loss)
+        assert torch.count_nonzero(parameter.grad) == 0

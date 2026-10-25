@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
 from typing import Any
 
 import pytest
@@ -179,6 +180,62 @@ def test_steps_without_drafts_are_not_observed(metrics: dict) -> None:
 
     assert target.calls == []
     assert scheduler.metrics() == {"draft_update/enabled": 1.0}
+
+
+@pytest.mark.parametrize("acceptance_length", [float("nan"), float("inf")])
+def test_non_finite_acceptance_lengths_are_not_observed(
+    acceptance_length: float,
+) -> None:
+    target = RecordingTarget()
+    scheduler = _acceptance_scheduler(target)
+
+    for step in range(5):
+        scheduler.observe(_rollout_metrics(acceptance_length))
+        scheduler.begin_step(step)
+
+    assert target.calls == []
+    assert scheduler.metrics() == {"draft_update/enabled": 1.0}
+
+
+def test_repeated_begin_step_keeps_the_first_decision() -> None:
+    """A retried step must not count as an extra paused step."""
+    target = RecordingTarget()
+    scheduler = _acceptance_scheduler(target, max_skip_steps=2)
+    for acceptance_length in [2.0, 2.0, 2.0]:
+        scheduler.observe(_rollout_metrics(acceptance_length))
+
+    decisions = []
+    for step in [0, 0, 0, 1, 1, 2]:
+        scheduler.begin_step(step)
+        decisions.append(scheduler.enabled)
+
+    assert decisions == [False, False, False, False, False, True]
+    assert target.calls == [False, True]
+
+
+def test_missing_acceptance_metrics_warn_once(caplog: pytest.LogCaptureFixture) -> None:
+    scheduler = _acceptance_scheduler(RecordingTarget())
+
+    with caplog.at_level(logging.WARNING):
+        for _ in range(3):
+            scheduler.observe({})
+
+    assert len(caplog.records) == 1
+    assert ACCEPTANCE_LENGTH_METRIC in caplog.records[0].getMessage()
+
+
+def test_interval_schedule_does_not_warn_without_acceptance_metrics(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    scheduler = DraftUpdateScheduler(
+        RecordingTarget(),
+        IntervalDraftUpdatePolicy(IntervalDraftUpdateSchedule(interval=5)),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        scheduler.observe({})
+
+    assert caplog.records == []
 
 
 @pytest.mark.parametrize(

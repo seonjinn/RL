@@ -484,3 +484,14 @@ def draft_refit_enabled(
     """Return whether generation must accept refitted draft weights."""
     coerced = coerce_draft_config(config)
     return coerced is not None and coerced.enabled
+
+
+def draft_update_can_pause(
+    config: "AnyDraftConfig | Mapping[str, Any] | None",
+) -> bool:
+    """Return whether the draft update schedule can pause draft training."""
+    coerced = coerce_draft_config(config)
+    if coerced is None or not coerced.enabled:
+        return False
+    schedule = getattr(coerced, "update_schedule", None)
+    return schedule is not None and schedule.type != "every_step"

@@ -40,7 +40,7 @@ from nemo_rl.algorithms.loss.wrapper import (
     DraftRuntimeLossWrapper,
     SequencePackingFusionLossWrapper,
     SequencePackingLossWrapper,
-    ZeroGradientTouchWrapper,
+    ZeroGradientWrapper,
     wrap_loss_fn_with_input_preparation,
 )
 
@@ -67,6 +67,6 @@ __all__ = [
     "SequencePackingLossWrapper",
     "DraftLossWrapper",
     "DraftRuntimeLossWrapper",
-    "ZeroGradientTouchWrapper",
+    "ZeroGradientWrapper",
     "wrap_loss_fn_with_input_preparation",
 ]

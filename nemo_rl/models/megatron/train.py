@@ -15,11 +15,13 @@
 from collections import defaultdict
 from collections.abc import Sequence
 from contextlib import contextmanager, nullcontext
+from dataclasses import dataclass
 from functools import partial
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, Union, cast
 
 import torch
 from megatron.core import tensor_parallel
+from megatron.core.distributed import DistributedDataParallel
 from megatron.core.models.gpt import GPTModel
 from megatron.core.packed_seq_params import PackedSeqParams
 from megatron.core.parallel_state import (
@@ -47,7 +49,7 @@ from nemo_rl.algorithms.loss import (
     NLLLossFn,
     SequencePackingFusionLossWrapper,
     SequencePackingLossWrapper,
-    ZeroGradientTouchWrapper,
+    ZeroGradientWrapper,
     prepare_loss_input,
     prepare_packed_loss_input,
     wrap_loss_fn_with_input_preparation,
@@ -590,6 +592,48 @@ def megatron_forward_backward(
                 clear_router_replay(model)
 
 
+@dataclass(frozen=True)
+class SkippedParameters:
+    """Trainable parameters that a train step leaves out of the forward pass.
+
+    Megatron DDP expects every trainable parameter in each microbatch. Its
+    forward pre-hook waits for the parameter all-gather, and its backward hook
+    needs a gradient. ``finish_param_sync`` does the work of the skipped
+    forward pre-hooks, and the loss gives the parameters all-zero gradients.
+    """
+
+    parameters: tuple[torch.nn.Parameter, ...]
+    finish_param_sync: Callable[[], None]
+
+
+def skipped_parameters(
+    model: MegatronModule, parameters: Sequence[torch.nn.Parameter]
+) -> SkippedParameters:
+    """Describe the parameters of ``model`` that a train step skips."""
+    parameters = tuple(parameters)
+    if not isinstance(model, DistributedDataParallel):
+        return SkippedParameters(parameters, finish_param_sync=lambda: None)
+    bucket_groups = tuple(
+        dict.fromkeys(
+            model.param_to_bucket_group[parameter]
+            for parameter in parameters
+            if parameter in model.param_to_bucket_group
+        )
+    )
+
+    def finish_param_sync() -> None:
+        # Only the overlap_param_gather pre-hooks wait on in-flight all-gathers.
+        # Without them, the all-gather already finished synchronously.
+        if not model.ddp_config.overlap_param_gather:
+            return
+        if not getattr(model, "remove_forward_pre_hook_handles", None):
+            return
+        for bucket_group in bucket_groups:
+            model._finish_param_sync_for_bucket_group(bucket_group)
+
+    return SkippedParameters(parameters, finish_param_sync=finish_param_sync)
+
+
 class LossPostProcessor:
     def __init__(
         self,
@@ -604,7 +648,7 @@ class LossPostProcessor:
         prepare_fn: Optional[Callable[..., Any]] = None,
         defer_draft_normalization: bool = False,
         teacher_output_layer_weight_by_index: Optional[dict[int, torch.Tensor]] = None,
-        zero_gradient_parameters: Sequence[torch.nn.Parameter] = (),
+        skipped_parameters: SkippedParameters | None = None,
     ):
         """Build a per-microbatch loss post-processor for the Megatron train loop.
 
@@ -631,9 +675,10 @@ class LossPostProcessor:
                 argument rather than the data dict because the sequence-packing
                 wrapper batch-slices every data entry, and rather than the loss
                 object because that is pickled to workers.
-            zero_gradient_parameters: Trainable parameters that this step
-                leaves out of the loss, such as a paused draft model. They get
-                an all-zero gradient so that DDP gradient buckets complete.
+            skipped_parameters: Trainable parameters that this step leaves
+                out of the forward pass, such as a paused draft model. Each
+                microbatch finishes their parameter all-gather and gives them
+                an all-zero gradient, so that DDP stays consistent.
         """
         self.loss_fn = loss_fn
         self.cfg = cfg
@@ -645,7 +690,7 @@ class LossPostProcessor:
         self.teacher_output_layer_weight_by_index = teacher_output_layer_weight_by_index
         self.draft_provider = draft_provider
         self.draft_normalization_counts = draft_normalization_counts
-        self.zero_gradient_parameters = tuple(zero_gradient_parameters)
+        self.skipped_parameters = skipped_parameters
         eagle_module = (
             getattr(draft_model, "eagle_module", None)
             if draft_model is not None
@@ -731,7 +776,7 @@ class LossPostProcessor:
                 loss, metrics = _direct_packed_model_loss(model_losses)
                 return loss * num_microbatches / cp_normalizer, metrics
 
-            return self._touch_zero_gradient_parameters(
+            return self._cover_skipped_parameters(
                 _counteract_direct_mcore_loss_averaging
             )
 
@@ -847,14 +892,24 @@ class LossPostProcessor:
             loss, metrics = loss_fn_before_mcore_scaling(*args, **kwargs)
             return loss * num_microbatches / cp_size, metrics
 
-        return self._touch_zero_gradient_parameters(_counteract_mcore_loss_averaging)
+        return self._cover_skipped_parameters(_counteract_mcore_loss_averaging)
 
-    def _touch_zero_gradient_parameters(
+    def _cover_skipped_parameters(
         self, loss_fn: Callable[..., Tuple[torch.Tensor, Dict[str, Any]]]
     ) -> Callable[..., Tuple[torch.Tensor, Dict[str, Any]]]:
-        if not self.zero_gradient_parameters:
+        skipped = self.skipped_parameters
+        if skipped is None or not skipped.parameters:
             return loss_fn
-        return ZeroGradientTouchWrapper(loss_fn, self.zero_gradient_parameters)
+        zero_gradient_loss_fn = ZeroGradientWrapper(loss_fn, skipped.parameters)
+
+        def _loss_with_skipped_parameters(
+            *args: Any, **kwargs: Any
+        ) -> Tuple[torch.Tensor, Dict[str, Any]]:
+            # The skipped forward would wait for these all-gathers at this point.
+            skipped.finish_param_sync()
+            return zero_gradient_loss_fn(*args, **kwargs)
+
+        return _loss_with_skipped_parameters
 
 
 def should_reduce_loss_across_context_parallel(

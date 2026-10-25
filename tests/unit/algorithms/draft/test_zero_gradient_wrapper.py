@@ -15,7 +15,7 @@
 import pytest
 import torch
 
-from nemo_rl.algorithms.loss import ZeroGradientTouchWrapper
+from nemo_rl.algorithms.loss import ZeroGradientWrapper
 
 
 def test_unused_parameters_receive_all_zero_gradients() -> None:
@@ -34,7 +34,7 @@ def test_unused_parameters_receive_all_zero_gradients() -> None:
     def loss_fn(scale: float) -> tuple[torch.Tensor, dict[str, float]]:
         return scale * policy_parameter.square().sum(), {"loss": 1.0}
 
-    wrapper = ZeroGradientTouchWrapper(loss_fn, unused)
+    wrapper = ZeroGradientWrapper(loss_fn, unused)
     loss, metrics = wrapper(2.0)
     expected_loss, _ = loss_fn(2.0)
     loss.backward()
@@ -51,4 +51,28 @@ def test_unused_parameters_receive_all_zero_gradients() -> None:
 
 def test_wrapper_requires_parameters() -> None:
     with pytest.raises(ValueError, match="at least one parameter"):
-        ZeroGradientTouchWrapper(lambda: (torch.zeros(()), {}), [])
+        ZeroGradientWrapper(lambda: (torch.zeros(()), {}), [])
+
+
+@pytest.mark.parametrize(
+    "parameter",
+    [
+        torch.nn.Parameter(torch.full((3,), float("nan"))),
+        torch.nn.Parameter(torch.empty(0)),
+    ],
+    ids=["non_finite", "empty"],
+)
+def test_parameter_values_do_not_reach_the_loss(parameter: torch.nn.Parameter) -> None:
+    """Catches a touch that reads draft values, which NaN or empty shards break."""
+    policy_parameter = torch.nn.Parameter(torch.tensor([2.0]))
+    wrapper = ZeroGradientWrapper(
+        lambda: (policy_parameter.square().sum(), {}), [parameter]
+    )
+
+    loss, _ = wrapper()
+    loss.backward()
+
+    assert torch.equal(loss, torch.tensor(4.0))
+    assert parameter.grad is not None
+    assert parameter.grad.shape == parameter.shape
+    assert torch.count_nonzero(parameter.grad) == 0

@@ -522,7 +522,7 @@ def test_frozen_param_groups_keeps_adamw_parameters_unchanged() -> None:
 
     optimizer.zero_grad(set_to_none=False)
     (policy_parameter.sum() + 0.0 * draft_parameter.sum()).backward()
-    with frozen_param_groups(draft_param_groups(optimizer)):
+    with frozen_param_groups(optimizer, draft_param_groups(optimizer)):
         optimizer.step()
 
     assert torch.equal(draft_parameter, draft_before)
@@ -532,10 +532,93 @@ def test_frozen_param_groups_keeps_adamw_parameters_unchanged() -> None:
 
 def test_frozen_param_groups_restores_lr_after_an_error() -> None:
     group = _param_group(_draft_tagged_parameter(), lr=3.0e-4)
+    optimizer = SimpleNamespace(optimizer=torch.optim.SGD([group]))
 
     with pytest.raises(RuntimeError, match="step failed"):
-        with frozen_param_groups([group]):
+        with frozen_param_groups(optimizer, optimizer.optimizer.param_groups):
             assert group["lr"] == 0.0
             raise RuntimeError("step failed")
 
-    assert group["lr"] == 3.0e-4
+    assert optimizer.optimizer.param_groups[0]["lr"] == 3.0e-4
+
+
+def _adamw_with_draft_group() -> tuple[torch.optim.AdamW, torch.nn.Parameter]:
+    draft_parameter = _draft_tagged_parameter()
+    policy_parameter = torch.nn.Parameter(torch.ones(2))
+    optimizer = torch.optim.AdamW(
+        [
+            {"params": [policy_parameter], "lr": 1.0e-2},
+            {"params": [draft_parameter], "lr": 1.0e-2},
+        ],
+        weight_decay=0.1,
+    )
+    return optimizer, draft_parameter
+
+
+def test_frozen_param_groups_restores_adam_state_after_a_prior_step() -> None:
+    """A paused step must not decay the Adam moments or advance the step count."""
+    optimizer, draft_parameter = _adamw_with_draft_group()
+    policy_parameter = optimizer.param_groups[0]["params"][0]
+    (policy_parameter.sum() + 2.0 * draft_parameter.sum()).backward()
+    optimizer.step()
+    state_before = {
+        key: value.clone() for key, value in optimizer.state[draft_parameter].items()
+    }
+    exp_avg = optimizer.state[draft_parameter]["exp_avg"]
+
+    optimizer.zero_grad(set_to_none=False)
+    (policy_parameter.sum() + 0.0 * draft_parameter.sum()).backward()
+    with frozen_param_groups(optimizer, draft_param_groups(optimizer)):
+        optimizer.step()
+
+    state_after = optimizer.state[draft_parameter]
+    assert state_after.keys() == state_before.keys()
+    for key, value in state_before.items():
+        assert torch.equal(state_after[key], value), key
+    assert state_after["exp_avg"] is exp_avg
+    assert optimizer.state[policy_parameter]["step"].item() == 2.0
+
+
+def test_frozen_param_groups_drops_state_created_by_the_frozen_step() -> None:
+    """A draft paused before its first update keeps a fresh optimizer state."""
+    optimizer, draft_parameter = _adamw_with_draft_group()
+    policy_parameter = optimizer.param_groups[0]["params"][0]
+    (policy_parameter.sum() + 0.0 * draft_parameter.sum()).backward()
+
+    with frozen_param_groups(optimizer, draft_param_groups(optimizer)):
+        optimizer.step()
+
+    assert draft_parameter not in optimizer.state
+    assert policy_parameter in optimizer.state
+
+
+def test_frozen_param_groups_finds_groups_in_chained_optimizers() -> None:
+    optimizer, draft_parameter = _adamw_with_draft_group()
+    wrapper = SimpleNamespace(
+        chained_optimizers=[
+            SimpleNamespace(
+                optimizer=torch.optim.SGD([torch.nn.Parameter(torch.ones(1))])
+            ),
+            SimpleNamespace(optimizer=optimizer),
+        ]
+    )
+    draft_group = optimizer.param_groups[1]
+    draft_parameter.grad = torch.ones_like(draft_parameter)
+
+    with frozen_param_groups(wrapper, [draft_group]):
+        assert draft_group["lr"] == 0.0
+        optimizer.step()
+
+    assert draft_group["lr"] == 1.0e-2
+    assert draft_parameter not in optimizer.state
+
+
+def test_frozen_param_groups_rejects_a_group_the_optimizer_does_not_own() -> None:
+    optimizer, _ = _adamw_with_draft_group()
+    foreign_group = _param_group(_draft_tagged_parameter(), lr=1.0e-4)
+
+    with pytest.raises(ValueError, match="does not own"):
+        with frozen_param_groups(optimizer, [foreign_group]):
+            pass
+
+    assert foreign_group["lr"] == 1.0e-4

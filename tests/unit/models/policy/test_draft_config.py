@@ -483,6 +483,28 @@ def test_megatron_draft_update_schedule_defaults_to_every_step() -> None:
 
 
 @pytest.mark.parametrize(
+    ("schedule", "enabled", "can_pause"),
+    [
+        (None, True, False),
+        ({"type": "interval", "interval": 5}, True, True),
+        ({"type": "acceptance"}, True, True),
+        ({"type": "acceptance"}, False, False),
+    ],
+)
+def test_draft_update_can_pause(
+    schedule: dict | None, enabled: bool, can_pause: bool
+) -> None:
+    from nemo_rl.models.policy.draft_config import draft_update_can_pause
+
+    values = {**_megatron_dflash_values(), "enabled": enabled}
+    if schedule is not None:
+        values.update(optimizer={"lr": 1.0e-4}, update_schedule=schedule)
+
+    assert draft_update_can_pause(MegatronDFlashDraftConfig(**values)) is can_pause
+    assert draft_update_can_pause(None) is False
+
+
+@pytest.mark.parametrize(
     "update_schedule",
     [{"type": "interval", "interval": 5}, {"type": "acceptance"}],
 )

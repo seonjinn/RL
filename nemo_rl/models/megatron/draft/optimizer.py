@@ -18,6 +18,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+import torch
 from megatron.bridge.training.config import (
     OptimizerConfigOverrideProvider,
     OptimizerConfigOverrideProviderContext,
@@ -143,20 +144,98 @@ def draft_param_groups(optimizer: Any) -> list[dict[str, Any]]:
     return groups
 
 
+def _torch_optimizers(optimizer: Any) -> Iterator[torch.optim.Optimizer]:
+    """Yield the torch optimizers inside a Megatron optimizer wrapper."""
+    if isinstance(optimizer, torch.optim.Optimizer):
+        yield optimizer
+    elif hasattr(optimizer, "chained_optimizers"):
+        for chained_optimizer in optimizer.chained_optimizers:
+            yield from _torch_optimizers(chained_optimizer)
+    elif getattr(optimizer, "optimizer", None) is not None:
+        yield from _torch_optimizers(optimizer.optimizer)
+
+
+def _snapshot(values: dict[Any, Any], skip_key: str | None = None) -> dict[Any, Any]:
+    # Non-tensor values are kept by reference. Optimizers replace them, they
+    # do not change them in place.
+    return {
+        key: value.detach().clone() if isinstance(value, torch.Tensor) else value
+        for key, value in values.items()
+        if key != skip_key
+    }
+
+
+def _restore(
+    values: dict[Any, Any], saved: dict[Any, Any], skip_key: str | None = None
+) -> None:
+    for key in [key for key in values if key != skip_key and key not in saved]:
+        del values[key]
+    for key, saved_value in saved.items():
+        current = values.get(key)
+        if (
+            isinstance(current, torch.Tensor)
+            and isinstance(saved_value, torch.Tensor)
+            and current.shape == saved_value.shape
+            and current.dtype == saved_value.dtype
+        ):
+            # In place, because fused optimizers can hold references to state tensors.
+            current.copy_(saved_value)
+        else:
+            values[key] = saved_value
+
+
 @contextmanager
-def frozen_param_groups(param_groups: Sequence[dict[str, Any]]) -> Iterator[None]:
-    """Keep the parameters of these groups unchanged for one optimizer step.
+def frozen_param_groups(
+    optimizer: Any, param_groups: Sequence[dict[str, Any]]
+) -> Iterator[None]:
+    """Keep the parameters and optimizer state of these groups unchanged for one step.
 
     Zero gradients alone do not freeze a parameter: Adam momentum and
     decoupled weight decay still move it. Both updates scale with the group
-    learning rate, so the step runs with lr=0. The Adam moments still decay
-    and the Adam step count still advances. The scheduler sets the next lr.
+    learning rate, so the step runs with lr=0. The step still decays the Adam
+    moments and advances the step count, so the context restores the group
+    settings and the per-parameter state after the step. The scaling factors
+    of a precision-aware optimizer are not restored.
+
+    Args:
+        optimizer: The optimizer that owns ``param_groups``. It can be a
+            torch optimizer or a Megatron optimizer that wraps one or more.
+        param_groups: Param groups of ``optimizer`` to freeze.
+
+    Raises:
+        ValueError: If ``optimizer`` does not own one of ``param_groups``.
     """
-    saved_lrs = [group["lr"] for group in param_groups]
+    owners = {
+        id(group): torch_optimizer
+        for torch_optimizer in _torch_optimizers(optimizer)
+        for group in torch_optimizer.param_groups
+    }
+    if any(id(group) not in owners for group in param_groups):
+        raise ValueError("the optimizer does not own a param group to freeze")
+
+    with torch.no_grad():
+        saved_groups = [_snapshot(group, skip_key="params") for group in param_groups]
+        saved_states = [
+            (
+                owners[id(group)].state,
+                parameter,
+                _snapshot(owners[id(group)].state[parameter])
+                if parameter in owners[id(group)].state
+                else None,
+            )
+            for group in param_groups
+            for parameter in group["params"]
+        ]
     for group in param_groups:
         group["lr"] = 0.0
     try:
         yield
     finally:
-        for group, lr in zip(param_groups, saved_lrs, strict=True):
-            group["lr"] = lr
+        with torch.no_grad():
+            for group, saved_group in zip(param_groups, saved_groups, strict=True):
+                _restore(group, saved_group, skip_key="params")
+            for state, parameter, saved_state in saved_states:
+                if saved_state is None:
+                    state.pop(parameter, None)
+                else:
+                    _restore(state.setdefault(parameter, {}), saved_state)
