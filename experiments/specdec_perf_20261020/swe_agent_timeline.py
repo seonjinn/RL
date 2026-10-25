@@ -43,6 +43,15 @@ PHASES = [
     "final_eval",
 ]
 SPLITS = ["deep_reset", "complete_runtime", "close_runtime"]
+REQUIRED = [
+    "ray_queue_time",
+    "openhands_run_time",
+    "create_runtime_time",
+    "connect_to_runtime_time",
+    "initialize_runtime_time",
+    "total_model_call_time",
+    "total_command_exec_time",
+]
 FIELDS = ["dir", "start", "turns", "openhands_run", *PHASES, "total", *SPLITS]
 CONTROLLER = re.compile(r"run controller: ([0-9.]+) seconds")
 
@@ -69,7 +78,8 @@ def trajectory(d: Path) -> dict[str, float | None] | None:
         return None
     history = [e for e in out.get("history") or [] if e.get("timestamp")]
     found = CONTROLLER.search(log)
-    if not history or not found:
+    # A trajectory that dies before its first model call logs no call metrics
+    if not history or not found or any(k not in m for k in REQUIRED):
         return None
     setup = (
         m["create_runtime_time"]
@@ -124,7 +134,8 @@ def main() -> None:
             f"{k:12s} {st.mean(xs):7.1f} {xs[len(xs) // 2]:7.1f} {xs[int(0.9 * len(xs))]:7.1f} {xs[-1]:7.1f}"
         )
     per_turn = [r["ctrl_other"] / r["turns"] for r in rows if r["turns"]]
-    print(f"ctrl_other per turn mean {st.mean(per_turn):.2f} s")
+    if per_turn:
+        print(f"ctrl_other per turn mean {st.mean(per_turn):.2f} s")
 
 
 if __name__ == "__main__":
