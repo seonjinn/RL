@@ -301,6 +301,29 @@ In this pair, the model-call saving maps one to one into the step. If a startup 
 
 The node-local copy helps only if Lustre metadata contention sets the pre time. Job 8247019 tests this. It runs the startup commands at concurrency 1, 8, 32 and 64, once from Lustre and once from `/dev/shm` ([bench](../agent_startup_bench/README.md)). All levers change Gym or OpenHands code.
 
+### Five trajectory fixes together give 1.11x on the step
+
+A ladder of six arms tests the trajectory fixes one at a time. All arms use DSpark K8 with ready-first and eval 450 s. Each arm adds one item to the arm above it. One commit holds all items, and config knobs turn them on ([ladder data](data/swe_traj_ladder.csv)).
+
+| Arm | Item added | Step (s) | This item | All items so far | Trajectory (s) | Phase that moves |
+|---|---|---|---|---|---|---|
+| L0 | Control | 150.0 | | | 130.1 | |
+| L1 | O1 precompiled OpenHands bytecode | 144.1 | 1.04x [0.95, 1.15] | 1.04x [0.95, 1.15] | 122.9 | pre 20.7 to 18.4 s, connect 16.0 to 12.4 s |
+| L2 | O8 least-loaded vLLM endpoint placement | 144.6 | 1.00x [0.90, 1.12] | 1.04x [0.93, 1.15] | 126.4 | none |
+| L3 | O2 direct venv python, O3 0.1 s `/alive` poll | 149.8 | 0.97x [0.87, 1.08] | 1.00x [0.94, 1.08] | 123.8 | init 14.3 to 13.3 s |
+| L4 | O4/O5 fast deep reset | 144.9 | 1.03x [0.94, 1.13] | 1.04x [0.95, 1.13] | 112.0 | init 13.3 to 2.2 s |
+| L5 | O7 0.2 s eval poll | 135.1 | 1.07x [0.98, 1.19] | 1.11x [0.99, 1.25] | 109.1 | final eval 34.1 to 28.9 s |
+
+Step ratios pair 20 steps and show a 90% bootstrap interval. "This item" compares an arm with the arm above it. "All items so far" compares it with L0. Trajectory is the mean sum of phases from `swe_agent_timeline.py`, over 653-672 trajectories per arm.
+
+- **Three items cut a phase.** O1 cuts pre and connect by 5.9 s. O4/O5 cut the deep reset in init from 12.1 s to 1.1 s. O7 cuts the final eval by 5.2 s.
+- O8, O2 and O3 do not move a phase. Their step ratios are noise.
+- Together, the items cut the trajectory by 21 s (16%) and the step by 15 s. Exposed generation drops from 94.0 s to 77.4 s. The ready-first step waits for full groups of eight rollouts. The mean time to the last rollout of a group drops from 133.7 s to 121.7 s.
+- Each single item is inside the step noise of about 10%. Only the total comes near the bar: 15 of 20 steps are faster, and the low bound is 0.99.
+- L0 ran before L1 to L5, and L1 to L5 ran at the same time. The item ratios of L2 to L5 compare arms of one window. L1 and the totals compare across windows.
+
+After the fixes, startup before the first model call is 35.4 s, down from 52.4 s. Model calls take 33.7 s. Pre (18.7 s) and connect (12.8 s) are now the largest phases outside the model calls and the final eval.
+
 ---
 
 ## Online co-training
