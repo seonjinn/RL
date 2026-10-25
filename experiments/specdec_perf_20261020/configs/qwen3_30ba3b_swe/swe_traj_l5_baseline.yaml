@@ -1,0 +1,8 @@
+# SWE trajectory ladder step 5 without a drafter: the baseline arm with all five trajectory items.
+defaults:
+  - swe_traj_l0_baseline.yaml
+  - traj_opt_pyc.yaml
+  - traj_opt_least_loaded.yaml
+  - traj_opt_direct_python_alive_poll.yaml
+  - traj_opt_fast_deep_reset.yaml
+  - traj_opt_eval_poll.yaml

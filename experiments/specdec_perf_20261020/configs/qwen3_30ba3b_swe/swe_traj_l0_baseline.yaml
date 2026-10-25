@@ -1,0 +1,4 @@
+# SWE trajectory ladder step 0 without a drafter: the baseline rf+eval450+drop4 arm on the nv-OpenHands fork commit.
+defaults:
+  - sc_swe_rf_eval450_drop4_baseline.yaml
+  - traj_opt_oh_fork.yaml

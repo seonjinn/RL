@@ -46,6 +46,19 @@ Each step config adds one `traj_opt_*.yaml` fragment to the step before it. L0 p
 
 The branch points the Gym submodule at `seonjinn/Gym` branch `sna/swe-traj-opt-1024`. Run `git submodule sync --recursive` before `git submodule update` in an old clone.
 
+## SpecDec on the optimized baseline
+
+The five items cut the non-model time of a trajectory. The drafter cuts only the model time. Thus the SpecDec gain can grow on the optimized arm. A 2x2 run measures it in one window: L0 and L5, each with and without the DSpark K8 drafter.
+
+| Arm | Drafter | Items | Config |
+|---|---|---|---|
+| b0 | none | none | `swe_traj_l0_baseline.yaml` |
+| d0 | DSpark K8 | none | `swe_traj_l0_control.yaml` |
+| b5 | none | L5 | `swe_traj_l5_baseline.yaml` |
+| d5 | DSpark K8 | L5 | `swe_traj_l5_eval_poll.yaml` |
+
+SpecDec gain = step time of the b arm / step time of the d arm at the same level. The b0 and d0 arms need clones with no .pyc files in the OpenHands tree.
+
 ## Notes
 
 - O1 writes .pyc files into the setup tree of the clone. A later control arm in that clone is not a control. Keep a clone with an uncompiled tree for L0.
