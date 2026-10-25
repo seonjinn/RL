@@ -1,0 +1,5 @@
+# V2 frozen SWE-regen DSpark taps12 K8 with a 600 s final-eval timeout.
+defaults:
+  - swe_regen_frozen_dspark_taps12_k8.yaml
+  - single_controller.yaml
+  - eval_timeout600.yaml

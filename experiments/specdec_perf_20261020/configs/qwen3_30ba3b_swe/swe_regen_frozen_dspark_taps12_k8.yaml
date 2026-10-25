@@ -1,0 +1,10 @@
+# SWE baseline + frozen SWE-regen DSpark with 12 target taps (p3 run), K=8. Same corpus, step,
+# block size and SWA window as swe_regen_frozen_dspark_k8.yaml, which taps 5 target layers.
+# Only the drafter path differs.
+defaults:
+  - swe_regen_frozen_dspark_k8.yaml
+policy:
+  generation:
+    vllm_kwargs:
+      speculative_config:
+        model: /lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/specdec_ptv23/swe_regen_q30t/p3/q30t-p3-dspark-taps12-rp25swa8k-b8-n32-s7010/vllm-export-7010
