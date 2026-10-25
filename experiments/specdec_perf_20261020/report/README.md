@@ -344,34 +344,34 @@ Step ratios pair 20 steps and show a 90% bootstrap interval. "This item" compare
 
 After the fixes, startup before the first model call is 35.4 s, down from 52.4 s. Model calls take 33.7 s. Pre (18.7 s) and connect (12.8 s) are now the largest phases outside the model calls and the final eval.
 
-### On the faster baseline, SpecDec keeps its 1.25x per trajectory
+### On the faster baseline, SpecDec gains more per trajectory but less per step
 
-The fixes cut time outside the model calls. SpecDec cuts the model calls. Thus the model calls are a larger part of the faster trajectory, and the SpecDec gain should grow. A projection from the ladder gave 1.24-1.31x on the step, against 1.22x before the fixes. A 2x2 tests this in one window. It runs L0 and L5, each with no drafter and with DSpark K8 ([arms](data/swe_sd2x2_arms.csv), [ratios](data/swe_sd2x2_ratios.csv)).
+The fixes cut time outside the model calls. SpecDec cuts the model calls. Thus the model calls are a larger part of the faster trajectory, and the SpecDec gain should grow. A projection from the ladder gave 1.24-1.31x on the step, against 1.22x before the fixes. A 2x2 tests this in one window. It runs L0 and L5, each with no drafter and with DSpark K8. Two replicates (R1, R2) run all four arms for 20 steps each ([arms](data/swe_sd2x2_arms.csv), [ratios](data/swe_sd2x2_ratios.csv)). The tables show both replicates together: 40 steps and 1311-1341 trajectories per arm.
 
-| Arm | Fixes | Drafter | Step (s) | Exposed gen (s) | Model calls (s) | Trajectory mean (s) | Trajectory p50 (s) | Trajectory p90 (s) |
+| Arm | Fixes | Drafter | Step (s) | Exposed gen (s) | Model calls (s) | Final eval (s) | Trajectory mean (s) | Trajectory p50 (s) | Trajectory p90 (s) |
+|---|---|---|---|---|---|---|---|---|---|
+| b0 | L0 | none | 181.9 | 126.8 | 64.0 | 33.5 | 160.4 | 137.0 | 222.0 |
+| d0 | L0 | DSpark K8 | 145.9 | 90.5 | 33.0 | 33.4 | 129.7 | 104.1 | 184.1 |
+| b5 | L5 | none | 165.5 | 110.2 | 66.5 | 30.5 | 139.0 | 122.4 | 197.8 |
+| d5 | L5 | DSpark K8 | 147.1 | 92.3 | 32.0 | 33.8 | 108.6 | 86.3 | 156.4 |
+
+| Comparison | Step [90%] | Steps faster | R1 step | R2 step | Model calls | Trajectory mean | Trajectory p50 | Trajectory p90 |
 |---|---|---|---|---|---|---|---|---|
-| b0 | L0 | none | 185.4 | 130.8 | 63.8 | 158.3 | 134.2 | 221.8 |
-| d0 | L0 | DSpark K8 | 139.5 | 84.3 | 32.4 | 127.1 | 103.9 | 182.7 |
-| b5 | L5 | none | 164.1 | 109.1 | 65.7 | 136.3 | 120.2 | 190.5 |
-| d5 | L5 | DSpark K8 | 147.8 | 91.8 | 32.4 | 109.5 | 85.4 | 164.6 |
+| SpecDec at L0 (b0 / d0) | 1.25x [1.15, 1.35] | 33/40 | 1.33x | 1.17x | 1.94x | 1.24x | 1.32x | 1.21x |
+| SpecDec at L5 (b5 / d5) | 1.13x [1.02, 1.24] | 28/40 | 1.11x | 1.14x | 2.08x | 1.28x | 1.42x | 1.26x |
+| Fixes without drafter (b0 / b5) | 1.10x [0.99, 1.23] | 24/40 | 1.13x | 1.07x | 0.96x | 1.15x | 1.12x | 1.12x |
+| Fixes with DSpark K8 (d0 / d5) | 0.99x [0.91, 1.07] | 23/40 | 0.94x | 1.04x | 1.03x | 1.19x | 1.21x | 1.18x |
+| Fixes and DSpark K8 (b0 / d5) | 1.24x [1.13, 1.34] | 31/40 | 1.25x | 1.22x | 2.00x | 1.48x | 1.59x | 1.42x |
 
-| Comparison | Step [90%] | Steps faster | Model calls | Trajectory mean | Trajectory p50 |
-|---|---|---|---|---|---|
-| SpecDec at L0 (b0 / d0) | 1.33x [1.22, 1.46] | 19/20 | 1.97x | 1.25x | 1.29x |
-| SpecDec at L5 (b5 / d5) | 1.11x [0.97, 1.26] | 14/20 | 2.03x | 1.25x | 1.41x |
-| Fixes without drafter (b0 / b5) | 1.13x [1.00, 1.28] | 13/20 | 0.97x | 1.16x | 1.12x |
-| Fixes with DSpark K8 (d0 / d5) | 0.94x [0.84, 1.05] | 10/20 | 1.00x | 1.16x | 1.22x |
-| Fixes and DSpark K8 (b0 / d5) | 1.25x [1.12, 1.37] | 17/20 | 1.97x | 1.45x | 1.57x |
+The step interval comes from a paired bootstrap that resamples steps within each replicate. Model calls and trajectory columns are means or quantiles over all trajectories from `swe_agent_timeline.py`.
 
-Model calls, trajectory mean and trajectory p50 are means or quantiles over 660-671 trajectories per arm from `swe_agent_timeline.py`.
+- **Per trajectory, the SpecDec gain grows on the faster baseline, as the projection says.** The mean gain goes from 1.24x to 1.28x, the median from 1.32x to 1.42x and the p90 from 1.21x to 1.26x. Both replicates agree.
+- **Per model call, the gain also grows a little: 1.94x to 2.08x.** The fixes do not change the model calls without a drafter (0.96x).
+- **Per step, the gain does not grow. It falls from 1.25x to 1.13x.** The L5 gain stays above 1 (low bound 1.02x), so SpecDec still helps on the faster baseline. R1 alone gave 1.33x and 1.11x. R2 gave 1.17x and 1.14x. Thus one 20-step run moves by about 10%, and the pooled numbers are the ones to use.
+- **With the drafter, the fixes do not cut the step (0.99x).** They cut the trajectory mean by 21 s (129.7 s to 108.6 s) and the p90 by 28 s. But exposed generation stays at 90.5 s and 92.3 s. Without the drafter, the same fixes cut exposed generation by 16.6 s. So with DSpark, the trajectory time no longer sets the exposed generation. The cause is not known yet. The candidates are the slowest trajectories in a step, the group gate of the ready-first sampler, and rollouts that async carries into the next step.
+- The fixes and DSpark K8 together give 1.24x [1.13, 1.34] on the step and 1.48x on the trajectory mean.
 
-- **SpecDec halves the model calls at both levels (1.97x and 2.03x).** The fixes do not change the model calls.
-- **Per trajectory, the SpecDec gain does not shrink.** The mean gain is 1.25x at both levels. The median gain grows from 1.29x to 1.41x, as the projection says.
-- The mean gain does not grow because d5 has 6.5 s more time outside the model calls than b5. Its final eval takes 34.2 s against 28.9 s, and its tool calls take 6.4 s against 4.8 s. The drafter does not change these phases. The two arms sample different patches, and different patches run different tests.
-- **The step gain falls from 1.33x to 1.11x.** This is opposite to the projection, but the step is not a robust metric here. The ladder ran the d0 and d5 configs one window earlier and got 1.11x from the fixes. This run gets 0.94x. Thus one 20-step run moves by about 10%. Async rollout also carries finished rollouts into the next step: b5 has two steps with less than 7 s of exposed generation.
-- The fixes and DSpark K8 together give 1.25x [1.12, 1.37] on the step and 1.45x on the trajectory mean.
-
-A replicate of all four arms runs now (jobs 8271695-8271699). The pooled 40 steps per arm will decide whether the step gain grows.
+**Answer: on the faster baseline, the SpecDec gain is higher per trajectory (1.28x) and per model call (2.08x), but lower per step (1.13x against 1.25x).** To turn the trajectory gain into a step gain, find what sets the exposed generation of the DSpark arms.
 
 ---
 
@@ -447,4 +447,4 @@ These jobs were PENDING on OCI-HSG on 2026-10-22, when the report closed. The re
 
 ## Key Takeaway
 
-**SpecDec speeds up GRPO by about the share of the step that is exposed decode.** It gives 1.3-1.6x E2E for long outputs and Q235. It gives 1.14-1.21x for OpenMath 4K sync on Q30 and N35, and 1.05x on Qwen3.5-35B. It gives no gain for train-bound async OpenMath 4K. DFlash and DSpark tie on OpenMath 4K. DSpark wins on long outputs (32K sync 1.55x against 1.30-1.33x, DAPO 32K async 1.46x against 1.41x) and on SWE model calls. On SWE, online co-training lifts the DFlash acceptance length from 1.28 to about 1.85 in 6 steps. It also lifts the model-call speedup from 1.00x to 1.28x over 20 steps and to 1.42x in steps 11-20. A second window repeats this (1.32x and 1.43x). Online DSpark K4 reaches 1.40x in steps 11-20, against 1.31x frozen. A DFlash drafter trained on SWE rollouts gives 1.83x at K3 and 2.06x at K7 on model calls. A DSpark drafter trained on the same rollouts gives 1.91x at K4 and 2.00x at K8. Online training at lr 1e-4 lowers all four (1.78x, 1.95x, 1.84x and 1.82x), so online co-training helps only an off-domain drafter. With the in_order sampler, the SWE step stays inside the noise, because final-eval timeouts set it. **With the ready-first sampler, frozen DSpark K8 gives 1.23x [1.19, 1.28] on the SWE step, faster in 20 of 20 steps.** Ready-first cuts the step spread from about 105% to 18%, so the 2x model-call gain shows in the step. A second pair with a 450 s eval timeout repeats it (1.22x [1.08, 1.38]), and the 35 s model-call saving becomes a 32 s step saving. With K8, OpenHands startup (51 s per trajectory) is longer than the model calls (32 s). Thus the next SWE lever is the agent startup, not the drafter. On math, a K below the block size is as good or slightly better. On SWE with a SWE-trained drafter, the block-size K beats the small K for both DFlash and DSpark. Thus the block-size K is a safe default, but not the best K. The next lever is not a better drafter for 4K async math, because that workload has no generation left to hide. The next lever is long-output and agentic workloads, where decode or model calls set the step time.
+**SpecDec speeds up GRPO by about the share of the step that is exposed decode.** It gives 1.3-1.6x E2E for long outputs and Q235. It gives 1.14-1.21x for OpenMath 4K sync on Q30 and N35, and 1.05x on Qwen3.5-35B. It gives no gain for train-bound async OpenMath 4K. DFlash and DSpark tie on OpenMath 4K. DSpark wins on long outputs (32K sync 1.55x against 1.30-1.33x, DAPO 32K async 1.46x against 1.41x) and on SWE model calls. On SWE, online co-training lifts the DFlash acceptance length from 1.28 to about 1.85 in 6 steps. It also lifts the model-call speedup from 1.00x to 1.28x over 20 steps and to 1.42x in steps 11-20. A second window repeats this (1.32x and 1.43x). Online DSpark K4 reaches 1.40x in steps 11-20, against 1.31x frozen. A DFlash drafter trained on SWE rollouts gives 1.83x at K3 and 2.06x at K7 on model calls. A DSpark drafter trained on the same rollouts gives 1.91x at K4 and 2.00x at K8. Online training at lr 1e-4 lowers all four (1.78x, 1.95x, 1.84x and 1.82x), so online co-training helps only an off-domain drafter. With the in_order sampler, the SWE step stays inside the noise, because final-eval timeouts set it. **With the ready-first sampler, frozen DSpark K8 gives 1.23x [1.19, 1.28] on the SWE step, faster in 20 of 20 steps.** Ready-first cuts the step spread from about 105% to 18%, so the 2x model-call gain shows in the step. A second pair with a 450 s eval timeout repeats it (1.22x [1.08, 1.38]), and the 35 s model-call saving becomes a 32 s step saving. With K8, OpenHands startup (51 s per trajectory) is longer than the model calls (32 s). Thus the next SWE lever is the agent startup, not the drafter. Five trajectory fixes cut the startup and give about 1.1x on the step. On that faster baseline, SpecDec gains more per trajectory (1.28x against 1.24x) but less per step (1.13x against 1.25x). The fixes and DSpark K8 together give 1.24x on the step. On math, a K below the block size is as good or slightly better. On SWE with a SWE-trained drafter, the block-size K beats the small K for both DFlash and DSpark. Thus the block-size K is a safe default, but not the best K. The next lever is not a better drafter for 4K async math, because that workload has no generation left to hide. The next lever is long-output and agentic workloads, where decode or model calls set the step time.
