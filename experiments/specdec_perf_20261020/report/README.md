@@ -265,6 +265,26 @@ Ready-first changes the training data, so we checked its health. Neither run abo
 
 The 450 s control is 1.18x [1.06, 1.33] faster than the ready-first control. Final eval drops from 76.8 s to 33.2 s per trajectory. The two controls use different prompts in 4 of 20 steps, so this ratio is a config estimate. Against the ready-first control, the 450 s config and K8 together give 1.43x (213.3 s to 148.7 s). The 450 s control has a token-probability error of 7.57 at step 19, and the 450 s K8 arm has no spike (median 1.03). Thus the 5.34 spike of the first K8 arm is not a SpecDec effect.
 
+**Two more drafters repeat the sampler result, and neither beats DSpark K8 on the step.** DFlash K7 and a DSpark K8 drafter with 12 target taps (against 5) ran with the same three sampler configs on 2026-10-24. They ran in a later window than their controls. Thus the model-call ratio, the acceptance length and the model-call speed are the robust metrics here.
+
+| Drafter | Sampler | Acceptance length | Model-call tok/s | Model-call ratio | Step ratio [90%] | Steps faster |
+|---|---|---|---|---|---|---|
+| DSpark K8, 5 taps | eval 600 s | 3.38 | 452.5 | 1.95x | 1.01x [0.79, 1.31] | 10/20 |
+| DFlash K7 | eval 600 s | 2.94 | 466.3 | 2.01x | 1.06x [0.81, 1.41] | 11/20 |
+| DSpark K8, 12 taps | eval 600 s | 3.17 | 460.0 | 1.99x | 1.00x [0.87, 1.14] | 12/20 |
+| DSpark K8, 5 taps | ready-first | 3.31 | 478.4 | 2.01x | 1.23x [1.19, 1.28] | 20/20 |
+| DFlash K7 | ready-first | 3.10 | 488.9 | 2.06x | 1.19x [1.13, 1.25] | 18/20 |
+| DSpark K8, 12 taps | ready-first | 3.19 | 470.2 | 1.98x | 1.21x [1.15, 1.26] | 19/20 |
+| DSpark K8, 5 taps | ready-first + eval 450 s | 3.26 | 461.2 | 1.98x | 1.22x [1.08, 1.38] | 14/20 |
+| DFlash K7 | ready-first + eval 450 s | 3.09 | 479.2 | 2.05x | 1.29x [1.15, 1.44] | 16/20 |
+| DSpark K8, 12 taps | ready-first + eval 450 s | 3.14 | 462.7 | 1.98x | 1.24x [1.10, 1.41] | 15/20 |
+
+The acceptance length is the draft-weighted mean (1 + accepted tokens / drafts) over the steps with nonzero V2 counters. The data is in [swe_variation.csv](data/swe_variation.csv).
+
+- The 12-tap DSpark drafter accepts 4-6% fewer tokens per draft than the 5-tap drafter. Its model-call speed stays within 2% of the 5-tap drafter, and its step ratios overlap. More target taps do not help this drafter.
+- DFlash K7 accepts fewer tokens than both DSpark drafters, but it has the highest model-call speed (466-489 tok/s). Thus a DFlash draft costs less time than a DSpark draft at these K values.
+- All three drafters give 1.95-2.06x on model calls. The eval 600 s sampler hides that gain in the step for all three drafters. The two ready-first samplers show 1.19-1.29x for all three drafters.
+
 ### OpenHands startup is as long as the K8 model calls
 
 With K8, model calls take 31.5 s per trajectory. The OpenHands startup before the first model call takes 51 s. `swe_agent_timeline.py` splits each OpenHands run of the 450 s pair into phases from the agent logs ([control](data/swe_agent_timeline_baseline.csv), [K8](data/swe_agent_timeline_k8.csv)).
