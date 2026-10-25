@@ -387,7 +387,20 @@ The first online arms did not train the drafter. On the Megatron path, the draft
 | DSpark K8 | ours | 1.60x | 1.13x | 4.01 | 18 |
 | DFlash K7, draft lr 1e-5 | ours | 1.70x | 1.14x | 3.80 | 18 |
 
-The DSpark K8 generation ratios differ (1.60x against 1.67x) with the same acceptance length. The cause is a difference between the two baselines. Arm generation is 38.3 s against 37.4 s, and baseline generation is 61.2 s against 62.3 s. Both differences are inside the 1.3-2.7% drift between jobs. Drafter training adds 9-12% to policy training time in both implementations.
+The DSpark K8 generation ratios differ (1.60x against 1.67x) with the same acceptance length. The cause is a difference between the two baselines. Arm generation is 38.3 s against 37.4 s, and baseline generation is 61.2 s against 62.3 s. Both differences are inside the 1.3-2.7% drift between jobs.
+
+**Our drafter training costs less than the teammate's in all six same-window pairs.** The first set gave a gap of 1.2-1.9 pp. This is near the run-to-run noise, so two more reps ran both implementations at the same time, with the arm order reversed in rep b. Each rep pairs an online arm with the baseline of the same implementation and rep over steps 3-20.
+
+| Arm (Q30 TP1) | Impl | Train overhead per rep | Pooled | Added train (s) | Step vs baseline |
+|---|---|---|---|---|---|
+| DFlash K7 | ours | 9.0%, 10.2%, 10.1% | 9.8% [8.2, 11.3] | 6.5 | 1.14x |
+| DFlash K7 | teammate | 10.2%, 15.5%, 14.0% | 13.2% [11.6, 14.9] | 8.9 | 1.12x |
+| DSpark K8 | ours | 9.7%, 13.1%, 11.4% | 11.4% [9.8, 13.1] | 7.6 | 1.12x |
+| DSpark K8 | teammate | 11.6%, 14.7%, 13.6% | 13.3% [11.7, 14.9] | 8.9 | 1.11x |
+
+The pooled interval resamples the steps of every run. The per-rep gap (ours minus teammate) is -1.2, -5.3 and -3.9 pp for DFlash K7 (mean -3.4 pp) and -1.8, -1.6 and -2.2 pp for DSpark K8 (mean -1.9 pp). The DFlash gap is larger but varies more between reps. The DSpark gap is smaller but stable. With the step resampling, the DFlash interval is [-5.8, -1.1] pp and the DSpark interval is [-4.2, +0.4] pp. Over the reps, the DFlash interval is [-6.9, +0.1] pp and the DSpark interval is [-2.3, -1.4] pp. The baseline policy training time changes by 1.4% (ours) and 2.8% (teammate) between reps, so the gap is not a baseline effect. Acceptance length, generation, logprob and refit times are the same in both implementations.
+
+Thus our implementation saves 1.3-2.4 s of drafter training per step, or about 1% of the step. The step speedup over the baseline is 1.14x against 1.12x for DFlash K7 and 1.12x against 1.11x for DSpark K8. The gain is real but small. Drafter training still adds 10-11% to policy training in our implementation. [match_overhead.py](../match_overhead.py) writes [data/match_tp1_overhead_pooled.csv](data/match_tp1_overhead_pooled.csv) from the W&B histories.
 
 **The draft lr sets the early dip, not the gain.**
 
