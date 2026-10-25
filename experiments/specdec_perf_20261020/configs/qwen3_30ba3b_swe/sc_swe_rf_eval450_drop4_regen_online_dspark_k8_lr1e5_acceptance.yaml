@@ -1,0 +1,10 @@
+# Same as sc_swe_rf_eval450_drop4_regen_online_dspark_k8_lr1e4_acceptance.yaml, but the draft lr is 1e-5.
+# SWE steps without drafts give no acceptance sample, so max_skip_steps forces a draft update
+# after 4 paused steps. The only change is the draft lr.
+defaults:
+  - sc_swe_rf_eval450_drop4_regen_online_dspark_k8_lr1e5.yaml
+  - ../qwen3_30ba3b/draft_update_acceptance.yaml
+policy:
+  draft:
+    update_schedule:
+      max_skip_steps: 4
