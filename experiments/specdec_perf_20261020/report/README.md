@@ -376,6 +376,91 @@ The step interval comes from a paired bootstrap that resamples steps within each
 
 ---
 
+## SWE rollouts are long, serial and narrow
+
+Why does SpecDec give 2x on SWE model calls but only 1.1-1.2x on the SWE step? The shape of a SWE rollout answers this. This section compares baseline SWE rollouts with math GRPO rollouts.
+
+`swe_workload_char.py` reads the OpenHands output of each rollout: the token usage and latency of each LLM call, the tool actions and the phase times. `swe_workload_compare.py` writes the per-run tables and adds the W&B step history (steps 2-20). `plot_swe_workload.py` draws the plots. The Q30 SWE column pools three V2 controls: the ready-first eval-450 control and the two L0 controls (643, 672 and 641 rollouts). The Q235 SWE column is the v10 baseline (831 rollouts, 10 logged steps). The math columns are the OpenMath sync controls of this report.
+
+| Per step | Q30 math 4K | Q235 math 8K | Q30 SWE (V2) | Q235 SWE |
+|---|---|---|---|---|
+| Rollouts | 2,048 | 512 | 32 | 61 |
+| LLM calls per rollout, mean | 1 | 1 | 11.2-11.8 | 21.0 |
+| Output tokens per rollout, mean (max) | 3.1K (4.0K) | 5.5K (8.1K) | 15.1-15.7K (32.5K) | 23.6K (62K) |
+| Truncated rollouts | 57% | 42% | 0% | 0.2% |
+| Output tokens per step | 6.41M | 2.83M | 0.48-0.50M | 1.43M |
+| Mean reward | 0.53 | 0.59 | 0.07 | 0.13 |
+| Groups with zero advantage | 63% | 67% | 84-87% | 80% |
+| Step (s) | 163 | 343 | 175-179 | 818 |
+| Exposed generation (s) | 62 (38%) | 234 (68%) | 124-126 (70-71%) | 747 (91%) |
+| Policy training (s) | 67 | 53 | 29 | 60 |
+
+![Mean step time by phase, steps 2-20.](plots/workload_step.png)
+
+Values are means of steps 2-20 ([data](data/workload_wandb.csv)). For math, zero-advantage groups are the groups with all samples wrong (26% and 22%) plus the groups with all samples right (37% and 45%).
+
+**SWE writes 13x fewer output tokens per step than Q30 math, but its step is as long.** Q30 SWE writes 0.50M tokens in a 175 s step. Q30 math writes 6.41M tokens in a 163 s step. Exposed generation is 70% of the Q30 SWE step and 91% of the Q235 SWE step. Thus SWE generation does not wait for token throughput. It waits for serial agent turns, container startup and the final eval.
+
+| Per rollout | Q30 SWE (V2) | Q235 SWE |
+|---|---|---|
+| LLM calls, p50 / p90 / p99 / max | 9 / 20-23 / 38-39 / 47-200 | 17 / 41 / 75 / 200 |
+| First prompt (tokens) | 5.8K | 5.9K |
+| Last prompt, mean / p90 / max | 27.3-27.8K / 41-43K / 104K | 41.4K / 69K / 127K |
+| Output per call, p50 / mean / p99 | 783-790 / 1,315-1,348 / 7.0-7.4K | 582 / 1,108 / 7.4K |
+| New input per call, p50 / mean | 69-73 / 669-735 | 162 / 643 |
+| Prompt over output, no cache / prefix cache | 16-17 / 0.83-0.89 | 29 / 0.80 |
+| Call latency, p50 / p90 (s) | 3.4 / 12.8-13.2 | 7.5 / 33 |
+| Decode rate per sequence, p50 (tok/s) | 233-237 | 77 |
+| Open calls, mean / p90 / max | 11.5-11.9 / 28-29 / 56-60 | 24.6 / 83 / 190 |
+| Open calls per vLLM engine, mean | 0.7 (16 TP2 engines) | 3.1 (8 TP8 engines) |
+| Gap between calls, p50 / p90 (s) | 0.18-0.19 / 0.64-0.77 | 0.28 / 1.75 |
+| Startup (s) | 30-33 | 30 |
+| Model calls (s) | 64-66 | 306 |
+| Tool execution (s) | 4.6-5.0 | 37 |
+| Agent run (s) | 125-135 | 407 |
+| Final eval (s) | 39-42 | 112 |
+| Rollout time, mean / p90 / max (s) | 158-168 / 222-241 / 783-794 | 517 / 861 / 2,553 |
+| Model-call share of rollout time | 39-40% | 59% |
+| Actions: read / edit / command / task list | 33-35% / 35-37% / 15-16% / 12-15% | 19% / 31% / 34% / 15% |
+| Resolved / patch / agent finish | 6.4-6.7% / 82-83% / 100% | 12.3% / 97% / 99% |
+
+Ranges span the three Q30 controls ([data](data/swe_workload_runs.csv)). Rollout time is Ray queue time plus agent run plus final eval. New input is the prompt of a call minus the prompt and output of the call before it. This is the tool result plus the chat template. It is the prefill work when the vLLM prefix cache keeps the earlier blocks. The decode rate counts calls with 64 or more output tokens. Open calls is the time-weighted count of LLM calls in flight over the run.
+
+**A SWE rollout is a chain of dependent calls, not one call.** The median rollout makes 9 calls on Q30 and 17 calls on Q235. Each call waits for the tool result of the call before it. Tools are fast: the gap between two calls has a p50 of 0.2-0.3 s, and tool execution is 5 s (Q30) and 37 s (Q235) per rollout. Thus the agent run is mostly LLM latency in series. The tail is long. 14% of Q30 rollouts and 38% of Q235 rollouts reach call 21. One Q30 run and the Q235 run each have a rollout that stops at the 200-turn cap.
+
+| Calls | Q30 reach | Q30 prompt | Q30 output | Q30 latency (s) | Q235 reach | Q235 prompt | Q235 output | Q235 latency (s) |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 100% | 5.8K | 2,994 | 11.8 | 100% | 5.9K | 3,670 | 47.6 |
+| 2 | 100% | 10.1K | 1,445 | 6.0 | 100% | 10.1K | 1,022 | 13.8 |
+| 3-5 | 100% | 15.0K | 1,451 | 6.2 | 100% | 14.7K | 1,420 | 19.3 |
+| 6-10 | 79% | 22.6K | 1,218 | 5.3 | 96% | 22.9K | 1,130 | 15.7 |
+| 11-20 | 42% | 30.8K | 935 | 4.1 | 75% | 33.8K | 899 | 12.0 |
+| 21-40 | 14% | 39.3K | 667 | 2.9 | 38% | 50.2K | 769 | 8.8 |
+| 41-80 | 0.8% | 53.9K | 891 | 3.9 | 10% | 70.2K | 609 | 6.4 |
+| 81+ | | | | | 0.8% | 77.9K | 431 | 4.2 |
+
+Q30 values come from the ready-first control. Reach is the share of rollouts that make the first call of the bucket. Prompt, output and latency are means per call ([data](data/swe_workload_by_turn.csv), [per call](data/swe_workload_by_call.csv)).
+
+![Left: LLM calls per rollout. Right: mean prompt per call, for call indices that 20 or more rollouts reach.](plots/swe_turns.png)
+
+**Each call sends the whole chat again.** The prompt grows from 5.8K tokens at call 1 to 28K (Q30) and 41K (Q235) at the last call, and up to 127K. A math prompt has about 110 tokens. Without a prefix cache, the prefill work is 16-29x the output. The prefix cache cuts the new input of a call to a p50 of 69-162 tokens, so the prefill work drops to 0.8-0.9x of the output. Thus SWE prefill is cheap only while the cache keeps the history of each rollout. A cache miss makes vLLM prefill the full context again. The right plot shows only the long rollouts at high call indices.
+
+**The first call writes the most tokens.** It writes 3.0K (Q30) and 3.7K (Q235) tokens and takes 12 s and 48 s. Later calls write 0.4-1.5K tokens each. Latency falls with the call index, but the context grows. Later calls write fewer tokens, and fewer rollouts are still open, so each engine has fewer sequences.
+
+**The batch is small, so decode is memory-bound.** Q30 has 11.9 open calls on average over 16 vLLM engines, 0.7 per engine. Q235 has 3.1 per TP8 engine. A Q30 math sync step starts with 2,048 prompts on 16 engines, 128 per engine. Per generation GPU, Q30 SWE writes about 90 output tokens per second (0.50M tokens per 175 s step on 32 GPUs). Q30 math writes about 6.5K tokens per second per GPU in its generation phase (6.41M tokens in 62 s on 16 GPUs). Each SWE sequence decodes at 235 tok/s (Q30) and 77 tok/s (Q235). At this batch size, a verify pass of K+1 tokens costs little more than one decode step. Thus the SpecDec model-call gain follows the acceptance length. The SWE-trained DSpark K8 drafter doubles the decode rate per sequence to 480 tok/s and cuts the call latency p50 from 3.4 s to 1.6 s. Its model-call share of the rollout drops from 40% to 25%.
+
+**The step waits for the slowest rollout.** The mean Q30 rollout takes 158-168 s, but the slowest takes 783-794 s. On Q235 the mean is 517 s and the slowest is 2,553 s. The final eval adds 39-42 s (Q30) and 112 s (Q235) per rollout, and startup adds 30 s. The model does not change these two phases. On the ready-first V2 baseline, model calls take 39-40% of the rollout time, against about one fifth in the scale2 runs. This is why the ready-first sampler and the eval timeout move the SWE step more than the drafter does.
+
+**The reward is sparse, and most groups give no gradient.** The mean reward is 0.07 (Q30) and 0.13 (Q235). 80-87% of SWE groups have zero advantage. The mean reward caps the all-right groups at 7% and 13%, so most zero-advantage groups fail in every sample. Math has 63-67% zero-advantage groups, but more than half of them have all samples right. Q30 rollouts that resolve the issue make fewer calls than the others (9.2 against 11.8).
+
+**SWE does not truncate.** Math truncates 42-57% of rollouts at 4K and 8K. SWE truncates 0-0.2%, and the agent ends with a finish action in 99-100% of rollouts. One Q30 rollout stopped at the context-window limit.
+
+**Q235 runs more shell commands.** Q30 spends 68-72% of its actions on file reads and edits. Q235 spends 34% on shell commands (Q30: 15-16%), so its tool time is 7x longer (37 s against 5 s). Tool time is still only 7% of the Q235 rollout. Q235 resolves 12.3% of the issues, against 6.4-6.7% for Q30.
+
+The data file also has two runs that the tables leave out. The V2 eval-600 control has a final eval of 104 s and a model-call share of 31%. The V1 baseline has 160 of its 176 rollouts in one results root, so its open-call counts are too low.
+
+---
+
 ## Online co-training
 
 The first online arms did not train the drafter. On the Megatron path, the draft parameters inherited the policy lr (3e-7). With the draft lr at 1e-4 and the policy at TP1, our implementation and the teammate's implementation give the same result.
@@ -485,8 +570,10 @@ Math pairs steps 3-20 and SWE pairs steps 1-20. Updates count the steps in this 
 
 All queued Q235 jobs finished on 2026-10-25, and the tables above include them: the sync K3 and K4 reruns (8150700, 8151041) and the Q235 SWE DSpark K8 arm (8149970). Job 8247019 (agent startup bench) ran, but its result is not valid. It needs a fix and a rerun.
 
+The ready-first V2 SWE runs log 7.7 s per step for `policy_and_reference_logprobs` and also log `train/probs_ratio`. The earlier V2 SWE runs logged no logprob timer. Thus the newer V2 code runs a logprob pass on SWE. The cause is open.
+
 ---
 
 ## Key Takeaway
 
-**SpecDec speeds up GRPO by about the share of the step that is exposed decode.** It gives 1.3-1.6x E2E for long outputs and Q235. It gives 1.14-1.21x for OpenMath 4K sync on Q30 and N35, and 1.05x on Qwen3.5-35B. It gives no gain for train-bound async OpenMath 4K. DFlash and DSpark tie on OpenMath 4K. DSpark wins on long outputs (32K sync 1.55x against 1.30-1.33x, DAPO 32K async 1.46x against 1.41x) and on SWE model calls. On SWE, online co-training lifts the DFlash acceptance length from 1.28 to about 1.85 in 6 steps. It also lifts the model-call speedup from 1.00x to 1.28x over 20 steps and to 1.42x in steps 11-20. A second window repeats this (1.32x and 1.43x). Online DSpark K4 reaches 1.40x in steps 11-20, against 1.31x frozen. A DFlash drafter trained on SWE rollouts gives 1.83x at K3 and 2.06x at K7 on model calls. A DSpark drafter trained on the same rollouts gives 1.91x at K4 and 2.00x at K8. Online training at lr 1e-4 lowers all four (1.78x, 1.95x, 1.84x and 1.82x), so online co-training helps only an off-domain drafter. With the in_order sampler, the SWE step stays inside the noise, because final-eval timeouts set it. **With the ready-first sampler, frozen DSpark K8 gives 1.23x [1.19, 1.28] on the SWE step, faster in 20 of 20 steps.** Ready-first cuts the step spread from about 105% to 18%, so the 2x model-call gain shows in the step. A second pair with a 450 s eval timeout repeats it (1.22x [1.08, 1.38]), and the 35 s model-call saving becomes a 32 s step saving. With K8, OpenHands startup (51 s per trajectory) is longer than the model calls (32 s). Thus the next SWE lever is the agent startup, not the drafter. Five trajectory fixes cut the startup and give about 1.1x on the step. On that faster baseline, SpecDec gains more per trajectory (1.28x against 1.24x) but less per step (1.13x against 1.25x). The fixes and DSpark K8 together give 1.24x on the step. On math, a K below the block size is as good or slightly better. On SWE with a SWE-trained drafter, the block-size K beats the small K for both DFlash and DSpark. Thus the block-size K is a safe default, but not the best K. The next lever is not a better drafter for 4K async math, because that workload has no generation left to hide. The next lever is long-output and agentic workloads, where decode or model calls set the step time.
+**SpecDec speeds up GRPO by about the share of the step that is exposed decode.** It gives 1.3-1.6x E2E for long outputs and Q235. It gives 1.14-1.21x for OpenMath 4K sync on Q30 and N35, and 1.05x on Qwen3.5-35B. It gives no gain for train-bound async OpenMath 4K. DFlash and DSpark tie on OpenMath 4K. DSpark wins on long outputs (32K sync 1.55x against 1.30-1.33x, DAPO 32K async 1.46x against 1.41x) and on SWE model calls. On SWE, online co-training lifts the DFlash acceptance length from 1.28 to about 1.85 in 6 steps. It also lifts the model-call speedup from 1.00x to 1.28x over 20 steps and to 1.42x in steps 11-20. A second window repeats this (1.32x and 1.43x). Online DSpark K4 reaches 1.40x in steps 11-20, against 1.31x frozen. A DFlash drafter trained on SWE rollouts gives 1.83x at K3 and 2.06x at K7 on model calls. A DSpark drafter trained on the same rollouts gives 1.91x at K4 and 2.00x at K8. Online training at lr 1e-4 lowers all four (1.78x, 1.95x, 1.84x and 1.82x), so online co-training helps only an off-domain drafter. With the in_order sampler, the SWE step stays inside the noise, because final-eval timeouts set it. **With the ready-first sampler, frozen DSpark K8 gives 1.23x [1.19, 1.28] on the SWE step, faster in 20 of 20 steps.** Ready-first cuts the step spread from about 105% to 18%, so the 2x model-call gain shows in the step. A second pair with a 450 s eval timeout repeats it (1.22x [1.08, 1.38]), and the 35 s model-call saving becomes a 32 s step saving. With K8, OpenHands startup (51 s per trajectory) is longer than the model calls (32 s). Thus the next SWE lever is the agent startup, not the drafter. Five trajectory fixes cut the startup and give about 1.1x on the step. On that faster baseline, SpecDec gains more per trajectory (1.28x against 1.24x) but less per step (1.13x against 1.25x). The fixes and DSpark K8 together give 1.24x on the step. A SWE rollout is 11-21 serial LLM calls on a context that grows to 28-41K tokens, with 0.7-3 open calls per vLLM engine. **Thus SWE decode is latency-bound and SpecDec doubles the model calls, but the SWE step waits for startup, the final eval and the slowest rollout.** On math, a K below the block size is as good or slightly better. On SWE with a SWE-trained drafter, the block-size K beats the small K for both DFlash and DSpark. Thus the block-size K is a safe default, but not the best K. The next lever is not a better drafter for 4K async math, because that workload has no generation left to hide. The next lever is long-output and agentic workloads, where decode or model calls set the step time.
