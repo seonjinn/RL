@@ -2,9 +2,10 @@
 
     python plot_swe_workload.py [report/data]
 
-Reads swe_workload_by_call.csv and workload_wandb.csv. Writes
-report/plots/swe_turns.png (calls per trajectory and context per call) and
-report/plots/workload_step.png (one GRPO step, math against SWE).
+Reads swe_workload_by_call.csv, workload_wandb.csv and swe_gbs_scaling.csv.
+Writes report/plots/swe_turns.png (calls per trajectory and context per call),
+report/plots/workload_step.png (one GRPO step, math against SWE) and
+report/plots/swe_gbs_step.png (one SWE step at GBS 32 and 256).
 """
 
 import csv
@@ -31,6 +32,12 @@ STEP_ROWS = [
     ("Q235 math 8K", "math q235 sync"),
     ("Q30 SWE V2", "swe q30 v2 rf450"),
     ("Q235 SWE", "swe q235 v10"),
+]
+GBS_ROWS = [
+    ("GBS 32 control", "32", "baseline"),
+    ("GBS 32 DSpark K8", "32", "dspark-k8"),
+    ("GBS 256 control", "256", "baseline"),
+    ("GBS 256 DSpark K8", "256", "dspark-k8"),
 ]
 PHASES = [
     ("gen_s", "Generation (exposed)", "#2a78d6"),
@@ -104,11 +111,9 @@ def plot_turns(data_dir: Path, path: Path) -> None:
     plt.close(fig)
 
 
-def plot_step(data_dir: Path, path: Path) -> None:
-    by_run = {r["run"]: r for r in read(data_dir / "workload_wandb.csv")}
+def phase_bars(path: Path, rows: list[tuple[str, dict, str]], title: str) -> None:
     fig, ax = plt.subplots(figsize=(10, 3.4), facecolor=SURFACE)
-    for y, (_, run) in enumerate(STEP_ROWS):
-        r = by_run[run]
+    for y, (_, r, note) in enumerate(rows):
         left = 0.0
         for key, phase, color in PHASES:
             v = float(r[key]) if r[key] != "nan" else 0.0
@@ -134,17 +139,11 @@ def plot_step(data_dir: Path, path: Path) -> None:
             linewidth=2,
             label="Other" if y == 0 else None,
         )
-        turns = round(float(r["turns"]))
-        note = (
-            f"{step:.0f} s, {float(r['samples']):.0f} samples x {turns} "
-            f"{'call' if turns == 1 else 'calls'}, "
-            f"{float(r['gen_tokens_per_step']) / 1e6:.2f}M output tokens"
-        )
         ax.annotate(note, (step + 10, y), va="center", fontsize=8, color=INK_MUTED)
-    ax.set_yticks(range(len(STEP_ROWS)), [name for name, _ in STEP_ROWS])
+    ax.set_yticks(range(len(rows)), [name for name, _, _ in rows])
     ax.invert_yaxis()
     ax.set_xlabel("Mean step time, steps 2-20 (s)", color=INK)
-    ax.set_title("One GRPO step: math against SWE", color=INK, loc="left")
+    ax.set_title(title, color=INK, loc="left")
     ax.legend(
         frameon=False,
         fontsize=8,
@@ -153,11 +152,39 @@ def plot_step(data_dir: Path, path: Path) -> None:
         bbox_to_anchor=(1, 1),
         labelcolor=INK,
     )
-    ax.set_xlim(0, max(float(by_run[run]["step_s"]) for _, run in STEP_ROWS) * 1.75)
+    ax.set_xlim(0, max(float(r["step_s"]) for _, r, _ in rows) * 1.75)
     style(ax)
     fig.tight_layout()
     fig.savefig(path, dpi=150, facecolor=SURFACE)
     plt.close(fig)
+
+
+def plot_step(data_dir: Path, path: Path) -> None:
+    by_run = {r["run"]: r for r in read(data_dir / "workload_wandb.csv")}
+    rows = []
+    for name, run in STEP_ROWS:
+        r = by_run[run]
+        turns = round(float(r["turns"]))
+        note = (
+            f"{float(r['step_s']):.0f} s, {float(r['samples']):.0f} samples x {turns} "
+            f"{'call' if turns == 1 else 'calls'}, "
+            f"{float(r['gen_tokens_per_step']) / 1e6:.2f}M output tokens"
+        )
+        rows.append((name, r, note))
+    phase_bars(path, rows, "One GRPO step: math against SWE")
+
+
+def plot_gbs(data_dir: Path, path: Path) -> None:
+    by_run = {(r["gbs"], r["run"]): r for r in read(data_dir / "swe_gbs_scaling.csv")}
+    rows = []
+    for name, gbs, run in GBS_ROWS:
+        r = by_run[(gbs, run)]
+        note = (
+            f"{float(r['step_s']):.0f} s, {float(r['samples']):.0f} samples, "
+            f"{float(r['samples_per_s']):.2f} samples/s"
+        )
+        rows.append((name, r, note))
+    phase_bars(path, rows, "Q30 SWE step: GBS 32 and 256")
 
 
 def main() -> None:
@@ -165,6 +192,7 @@ def main() -> None:
     plots = HERE / "report" / "plots"
     plot_turns(data_dir, plots / "swe_turns.png")
     plot_step(data_dir, plots / "workload_step.png")
+    plot_gbs(data_dir, plots / "swe_gbs_step.png")
 
 
 if __name__ == "__main__":

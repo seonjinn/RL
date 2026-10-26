@@ -461,6 +461,51 @@ The data file also has two runs that the tables leave out. The V2 eval-600 contr
 
 ---
 
+## GBS 256 triples SWE throughput and makes training the largest phase
+
+A Q30 SWE step at GBS 32 is 70% exposed generation, and its 16 vLLM engines hold 0.7 open calls each. Does a larger batch fill the engines and move the step to training? Two Q30 V2 jobs ran GBS 256 (32 prompts x 8) on the same 9 nodes: 16 vLLM TP2 engines on 8 nodes and 1 training node. Baseline 8303367 and frozen SWE-trained DSpark K8 8303368 ran at the same time at f248cf9a38. Each changes only `grpo.num_prompts_per_step` (4 to 32) against the GBS 32 eval-450 ready-first pair (8228299 and 8228300). The third GBS 32 row is frozen DSpark K8 at f248cf9a38 (8273110), from the schedule runs.
+
+| Q30 V2, steps 2-20 | GBS 32 control | GBS 32 DSpark K8 | GBS 32 DSpark K8 (f248) | GBS 256 control | GBS 256 DSpark K8 |
+|---|---|---|---|---|---|
+| Samples per step | 32 | 32 | 32 | 252 | 253 |
+| Step (s) | 175.3 | 144.1 | 139.3 | 457.9 | 392.9 |
+| Exposed generation (s) | 123.9 (71%) | 88.8 (62%) | 87.1 (62%) | 161.2 (35%) | 99.7 (25%) |
+| Policy training (s) | 28.6 (16%) | 28.7 (20%) | 28.5 (20%) | 219.3 (48%) | 215.8 (55%) |
+| Logprob (s) | 7.7 | 7.7 | 7.5 | 58.2 (13%) | 57.5 (15%) |
+| Refit (s) | 5.9 | 6.3 | 6.3 | 6.1 | 6.2 |
+| Samples per second | 0.18 | 0.22 | 0.23 | 0.55 | 0.64 |
+| Training tokens per second | 2,848 | 3,195 | 3,445 | 8,399 | 9,641 |
+| Model calls per rollout, mean / max (s) | 67.1 / 148 | 31.9 / 80 | 31.6 / 71 | 100.6 / 295 | 48.5 / 165 |
+| Model-call tok/s per rollout | 233 | 459 | 474 | 152 | 309 |
+| Agent run, mean / max (s) | 135 / 258 | 93 / 205 | 94 / 201 | 196 / 630 | 125 / 473 |
+| Final eval (s) | 34.4 | 33.3 | 33.1 | 39.7 | 39.9 |
+| Ray queue (s) | 0.67 | 0.62 | 0.62 | 2.69 | 2.61 |
+| Masked samples | 0.3% | 0.5% | 0% | 1.5% | 1.1% |
+| Mean reward | 0.069 | 0.056 | 0.069 | 0.073 | 0.069 |
+
+![Mean step time by phase, steps 2-20, GBS 32 and GBS 256.](plots/swe_gbs_step.png)
+
+Values are means of steps 2-20 ([data](data/swe_gbs_scaling.csv)). Throughput columns divide the sum of the samples or tokens by the sum of the step times. [swe_gbs_scaling.py](../swe_gbs_scaling.py) writes the table from the W&B histories.
+
+**8x the samples cost 2.6x the step time, so throughput goes up 3.0x.** The GBS 256 control trains 252 samples in 458 s, against 32 samples in 175 s. Samples per second go from 0.18 to 0.55. Policy training and logprob scale with the samples (7.7x and 7.6x). Training costs 853-900 s per 1,000 samples at both batch sizes. Refit stays at 6 s. Exposed generation grows only 1.3x (124 s to 161 s). The ready-first sampler can start the rollouts of the next step during training (`max_lookahead_versions: 1`), so a longer training phase can hide more of the rollout time.
+
+**Training is now the largest phase, and one training node sets the limit.** At GBS 256, training and logprob take 61% of the control step and 70% of the DSpark step. All training runs on 1 node of 8 GPUs. Training and logprob cost 1.10 s per sample. Thus this layout cannot go above about 0.91 samples per second at any batch size, even with zero exposed generation. The control reaches 61% of this limit and DSpark K8 reaches 71%. A larger GBS on the same 9 nodes moves the step closer to this limit, but cannot pass it. The next lever at GBS 256 is the split between generation and training nodes. The ready-first config also does the 58 s logprob pass on each step (see [Open follow-up](#open-follow-up)).
+
+**Each rollout gets slower at the larger batch.** Model calls per rollout grow from 67 s to 101 s, and the decode rate per rollout drops from 233 to 152 tok/s (0.65x). The engines hold 8x the open rollouts, so each engine runs a larger decode batch. The agent run outside the model calls grows from 68 s to 95 s, and the slowest agent run grows from 258 s to 630 s. The Ray queue grows from 0.7 s to 2.7 s, and the final eval from 34 s to 40 s. This suggests that the containers on each node also compete for CPU and disk. The masked share goes up from 0.3% to 1.1-1.5%.
+
+| DSpark K8 against control | Model-call ratio [90%] | Steps 11-20 | Step ratio [90%] | Steps faster | Step spread |
+|---|---|---|---|---|---|
+| GBS 32 (8228300 against 8228299) | 1.98x [1.94, 2.02] | 2.01x | 1.22x [1.08, 1.38] | 14/20 | 31-35% |
+| GBS 256 (8303368 against 8303367) | 2.04x [2.01, 2.06] | 2.04x | **1.17x [1.14, 1.20]** | **19/20** | 15% |
+
+Each pair runs at one batch size. The intervals resample the 20 paired steps ([data](data/swe_variation.csv)).
+
+**DSpark K8 keeps its 2x model-call gain at 8x the batch.** The model-call ratio is 2.04x [2.01, 2.06], against 1.98x at GBS 32. Thus a verify pass of K+1 tokens still costs about one decode step at this batch. DSpark cuts the mean model calls by 52 s per rollout and the slowest model calls by 130 s. Exposed generation saves 61.5 s per step and the step saves 65.0 s. Thus the seconds map one to one, as at GBS 32. The step saving is larger than the mean rollout saving, because the step waits for the slow rollouts, and these make the most calls.
+
+**The step gain is smaller but more certain.** DSpark K8 gives 1.17x [1.14, 1.20] on the step and is faster in 19 of 20 steps. At GBS 32 it gave 1.22x [1.08, 1.38] in 14 of 20 steps. The step spread drops from 31-35% to 15%, because one slow final eval now moves a smaller share of the step. The step ratio is lower because generation is now 35% of the control step, against 71% at GBS 32. If exposed generation were zero, the GBS 256 step would be 1.54x faster. DSpark K8 gets 1.17x of this 1.54x. **DSpark K8 at GBS 256 gives 3.5x the samples per second of the GBS 32 control on the same 9 nodes (0.64 against 0.18).** The batch size gives 3.0x and the drafter gives 1.17x on top.
+
+---
+
 ## Online co-training
 
 The first online arms did not train the drafter. On the Megatron path, the draft parameters inherited the policy lr (3e-7). With the draft lr at 1e-4 and the policy at TP1, our implementation and the teammate's implementation give the same result.
@@ -563,6 +608,7 @@ Math pairs steps 3-20 and SWE pairs steps 1-20. Updates count the steps in this 
 | Q235 sync DFlash K3 and DSpark K4 died at startup | megatron-core editable build race between nodes of one job. | fixed in 844da82424, reruns 8150700 and 8151041 ran 20/20 steps and the tables include them |
 | Q235 async token-probability error spikes in 2 of 6 SpecDec arms | DFlash K3 gives 319 at step 16 and DSpark K6 gives 237.5 at step 8. All other steps of the six arms give 1.05-2.35, and the control maximum is 1.09. The spike is not monotonic in K. The generation KL error stays at 0.0068-0.0069 and the reward at 0.57 in all arms. | not root-caused. One step per run, no effect on the step time or the reward. |
 | More one-step token-probability error spikes in Q235 SpecDec arms | Sync DSpark K4 gives 5.83 at step 11 and sync DFlash K3 gives 2.52 at step 19 (control maximum 1.09). SWE DSpark K8 gives 2381 at step 9 and SWE DFlash K7 gives 8.2 and 7.4 at steps 4 and 7 (control maximum 1.04). The generation KL error stays at the control value (0.0067-0.0078 sync, 0.0019 SWE). | same pattern as the async spikes, not root-caused. The SWE DSpark K8 reward (0.13) matches the control (0.13). |
+| GBS 256 agent peak RSS: mean 384-504 MB against 792-893 MB at GBS 32, max 4.0-5.6 GB against 1.9-2.4 GB | A larger batch should not lower the mean container memory. The max goes up as expected. | not root-caused. No job ran out of memory, and the masked share is 1.1-1.5%. |
 
 ---
 
@@ -570,10 +616,10 @@ Math pairs steps 3-20 and SWE pairs steps 1-20. Updates count the steps in this 
 
 All queued Q235 jobs finished on 2026-10-25, and the tables above include them: the sync K3 and K4 reruns (8150700, 8151041) and the Q235 SWE DSpark K8 arm (8149970). Job 8247019 (agent startup bench) ran, but its result is not valid. It needs a fix and a rerun.
 
-The ready-first V2 SWE runs log 7.7 s per step for `policy_and_reference_logprobs` and also log `train/probs_ratio`. The earlier V2 SWE runs logged no logprob timer. Thus the newer V2 code runs a logprob pass on SWE. The cause is open.
+The ready-first V2 SWE runs log 7.7 s per step for `policy_and_reference_logprobs` and also log `train/probs_ratio`. The cause is the config, not the V2 code. `ready_first.yaml` sets `force_on_policy_ratio: false`, so these runs do the prev-logprob pass. The in_order V2 runs keep `true` and skip it.
 
 ---
 
 ## Key Takeaway
 
-**SpecDec speeds up GRPO by about the share of the step that is exposed decode.** It gives 1.3-1.6x E2E for long outputs and Q235. It gives 1.14-1.21x for OpenMath 4K sync on Q30 and N35, and 1.05x on Qwen3.5-35B. It gives no gain for train-bound async OpenMath 4K. DFlash and DSpark tie on OpenMath 4K. DSpark wins on long outputs (32K sync 1.55x against 1.30-1.33x, DAPO 32K async 1.46x against 1.41x) and on SWE model calls. On SWE, online co-training lifts the DFlash acceptance length from 1.28 to about 1.85 in 6 steps. It also lifts the model-call speedup from 1.00x to 1.28x over 20 steps and to 1.42x in steps 11-20. A second window repeats this (1.32x and 1.43x). Online DSpark K4 reaches 1.40x in steps 11-20, against 1.31x frozen. A DFlash drafter trained on SWE rollouts gives 1.83x at K3 and 2.06x at K7 on model calls. A DSpark drafter trained on the same rollouts gives 1.91x at K4 and 2.00x at K8. Online training at lr 1e-4 lowers all four (1.78x, 1.95x, 1.84x and 1.82x), so online co-training helps only an off-domain drafter. With the in_order sampler, the SWE step stays inside the noise, because final-eval timeouts set it. **With the ready-first sampler, frozen DSpark K8 gives 1.23x [1.19, 1.28] on the SWE step, faster in 20 of 20 steps.** Ready-first cuts the step spread from about 105% to 18%, so the 2x model-call gain shows in the step. A second pair with a 450 s eval timeout repeats it (1.22x [1.08, 1.38]), and the 35 s model-call saving becomes a 32 s step saving. With K8, OpenHands startup (51 s per trajectory) is longer than the model calls (32 s). Thus the next SWE lever is the agent startup, not the drafter. Five trajectory fixes cut the startup and give about 1.1x on the step. On that faster baseline, SpecDec gains more per trajectory (1.28x against 1.24x) but less per step (1.13x against 1.25x). The fixes and DSpark K8 together give 1.24x on the step. A SWE rollout is 11-21 serial LLM calls on a context that grows to 28-41K tokens, with 0.7-3 open calls per vLLM engine. **Thus SWE decode is latency-bound and SpecDec doubles the model calls, but the SWE step waits for startup, the final eval and the slowest rollout.** On math, a K below the block size is as good or slightly better. On SWE with a SWE-trained drafter, the block-size K beats the small K for both DFlash and DSpark. Thus the block-size K is a safe default, but not the best K. The next lever is not a better drafter for 4K async math, because that workload has no generation left to hide. The next lever is long-output and agentic workloads, where decode or model calls set the step time.
+**SpecDec speeds up GRPO by about the share of the step that is exposed decode.** It gives 1.3-1.6x E2E for long outputs and Q235. It gives 1.14-1.21x for OpenMath 4K sync on Q30 and N35, and 1.05x on Qwen3.5-35B. It gives no gain for train-bound async OpenMath 4K. DFlash and DSpark tie on OpenMath 4K. DSpark wins on long outputs (32K sync 1.55x against 1.30-1.33x, DAPO 32K async 1.46x against 1.41x) and on SWE model calls. On SWE, online co-training lifts the DFlash acceptance length from 1.28 to about 1.85 in 6 steps. It also lifts the model-call speedup from 1.00x to 1.28x over 20 steps and to 1.42x in steps 11-20. A second window repeats this (1.32x and 1.43x). Online DSpark K4 reaches 1.40x in steps 11-20, against 1.31x frozen. A DFlash drafter trained on SWE rollouts gives 1.83x at K3 and 2.06x at K7 on model calls. A DSpark drafter trained on the same rollouts gives 1.91x at K4 and 2.00x at K8. Online training at lr 1e-4 lowers all four (1.78x, 1.95x, 1.84x and 1.82x), so online co-training helps only an off-domain drafter. With the in_order sampler, the SWE step stays inside the noise, because final-eval timeouts set it. **With the ready-first sampler, frozen DSpark K8 gives 1.23x [1.19, 1.28] on the SWE step, faster in 20 of 20 steps.** Ready-first cuts the step spread from about 105% to 18%, so the 2x model-call gain shows in the step. A second pair with a 450 s eval timeout repeats it (1.22x [1.08, 1.38]), and the 35 s model-call saving becomes a 32 s step saving. With K8, OpenHands startup (51 s per trajectory) is longer than the model calls (32 s). Thus the next SWE lever is the agent startup, not the drafter. Five trajectory fixes cut the startup and give about 1.1x on the step. On that faster baseline, SpecDec gains more per trajectory (1.28x against 1.24x) but less per step (1.13x against 1.25x). The fixes and DSpark K8 together give 1.24x on the step. A SWE rollout is 11-21 serial LLM calls on a context that grows to 28-41K tokens, with 0.7-3 open calls per vLLM engine. **Thus SWE decode is latency-bound and SpecDec doubles the model calls, but the SWE step waits for startup, the final eval and the slowest rollout.** At GBS 256 on the same 9 nodes, throughput goes up 3.0x and training becomes the largest phase (48%). DSpark K8 keeps 2.04x on model calls and gives 1.17x [1.14, 1.20] on the step, faster in 19 of 20 steps. Together they give 3.5x the samples per second of the GBS 32 control. At that batch, one training node sets the limit (about 0.91 samples per second). On math, a K below the block size is as good or slightly better. On SWE with a SWE-trained drafter, the block-size K beats the small K for both DFlash and DSpark. Thus the block-size K is a safe default, but not the best K. The next lever is not a better drafter for 4K async math, because that workload has no generation left to hide. The next lever is long-output and agentic workloads, where decode or model calls set the step time.

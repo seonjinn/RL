@@ -59,6 +59,9 @@ CONTROL = {
     "swe-sd1024-sc-r16-eval600-regen-frozen-dspark-taps12-k8": "swe-sd1023-sc-r16-eval600-baseline",
     "swe-sd1024-sc-r16-readyfirst-regen-frozen-dspark-taps12-k8": "swe-sd1023-sc-r16-readyfirst-baseline",
     "swe-sd1024-sc-r16-rf-eval450-drop4-regen-frozen-dspark-taps12-k8": "swe-sd1024-sc-r16-rf-eval450-drop4-baseline",
+    # GBS 256 steps hold 8x the work of the runs above, so they pair only with each other
+    "swe-sd1026-sc-r16-gbs256-rf-eval450-drop4-baseline": "swe-sd1026-sc-r16-gbs256-rf-eval450-drop4-baseline",
+    "swe-sd1026-sc-r16-gbs256-rf-eval450-drop4-regen-frozen-dspark-k8": "swe-sd1026-sc-r16-gbs256-rf-eval450-drop4-baseline",
 }
 STEPS = range(1, 21)
 # Online drafters start from the frozen weights and adapt over the first steps
