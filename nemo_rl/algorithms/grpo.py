@@ -794,11 +794,8 @@ def setup(
 
     _validate_multimodal_dedup_capability(master_config)
     _validate_seq_logprob_error_in_loss(master_config)
-<<<<<<< HEAD
     _validate_draft_trainer_entrypoint(master_config)
-=======
     enable_nemo_gym = should_use_nemo_gym(master_config)
->>>>>>> origin/main
 
     # Validation-only sampling is honored only on the NeMo-Gym vLLM rollout
     # path; everywhere else validation must sample exactly like training.
