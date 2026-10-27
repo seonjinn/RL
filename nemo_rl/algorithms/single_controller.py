@@ -93,7 +93,10 @@ from nemo_rl.algorithms.async_utils.staleness_sampler import (
     TransactionalAdmissionSampler,
     create_sampler,
 )
-from nemo_rl.algorithms.draft_update_schedule import build_draft_update_scheduler
+from nemo_rl.algorithms.draft_update_schedule import (
+    DraftUpdateScheduler,
+    build_draft_update_scheduler,
+)
 from nemo_rl.algorithms.grpo import (
     GRPOSaveState,
     _save_adaptive_loss_state,
@@ -368,6 +371,10 @@ class SingleControllerActor:
     # handle, so an instance built without running __init__ emits no spans
     # rather than raising out of the training loop.
     _tracer: Any = None
+
+    # ``None`` means the draft trains on every step, which is also the right
+    # behavior for an instance built without running __init__.
+    _draft_update_scheduler: DraftUpdateScheduler | None = None
 
     def __init__(
         self,

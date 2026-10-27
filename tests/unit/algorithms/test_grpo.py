@@ -2680,7 +2680,7 @@ def _run_sync_draft_refit_marker_case(
     master_config.grpo.val_at_end = False
     master_config.grpo.use_dynamic_sampling = False
     master_config.checkpointing["enabled"] = False
-    master_config.policy["draft"] = MagicMock(enabled=True)
+    master_config.policy["draft"] = _block_draft_config("dflash")
 
     save_state = _initial_grpo_save_state()
     save_state.total_steps = total_steps
