@@ -134,6 +134,10 @@ The N35 K3/K4 and K7/K8 arms ran in different cohorts. Thus their gap includes a
 
 Model calls take about one fifth of a SWE trajectory. Thus a 1.3x model-call gain saves about 5% of the trajectory. This gain is smaller than the drift between time windows (next table). Thus the E2E column is not a SpecDec measure on SWE.
 
+![Model-call and step speedup of each Q30 V2 SWE run over its same-config control. The gray bar is the model-call speedup. The marker is the step speedup, and the line is its 90% interval. A hollow marker is an online drafter. A bold label marks a step interval above 1. Model calls run 2x faster with the SWE-trained drafter. The step gain is confirmed only with the ready-first sampler.](plots/swe_speedup.png)
+
+The plot does not show Q235. It has 11 steps and no interval (1.14x / 1.33x model calls, 1.16x / 1.12x step for DFlash K7 / DSpark K8). [plot_swe_report.py](../plot_swe_report.py) draws all four SWE plots from `data/`.
+
 **DSpark gives a steady 1.24-1.33x on model calls, on Q30 and on Q235. DFlash on the Thinking drafter gives 1.00-1.05x on Q30 and 1.14x on Q235.** The DFlash acceptance length is 1.3-1.4, against 1.7-2.1 for DSpark. A Q235 model call spends more of its time in decode, so the same acceptance gives more. Q235 DSpark K8 gets 1.33x from an acceptance length of 1.73. Q30 DSpark K8 needs 1.87 for 1.25x.
 
 **Online co-training fixes the weak DFlash drafter on SWE.** The DFlash K3 acceptance length starts at the frozen value (1.28 at step 1). From step 6 it is 1.76-1.89. Thus model calls go from 1.00x frozen to 1.28x online. The V2 window-2 pair repeats this result: 1.01x frozen against 1.32x online. Online DFlash at the block-size K (K7) gives 1.27x. Online DSpark K4 drops at step 2 (1.45). From step 10 it is above the frozen arm (1.9-2.1 against 1.6-2.1).
@@ -237,6 +241,8 @@ The online step ratios are 0.94x and 1.00x, and both intervals include 1. The on
 
 **Online co-training at lr 1e-4 also makes the SWE-trained DSpark drafter worse, more at K8.** Online K4 gives 1.84x against 1.91x frozen. Online K8 gives 1.82x against 2.00x frozen. In steps 11-20 the gap grows: 1.80x against 1.90x at K4, and 1.75x against 1.98x at K8. The draft loss goes up from 0.98 in steps 1-10 to 1.04 in steps 11-20 at K4, and from 1.00 to 1.08 at K8. The DSpark loss adds CE and TV terms, so its value does not compare with the DFlash loss. Policy training takes 32.1-32.3 s per step in the online arms, against 29.5-29.8 s in the frozen arms (+8-9%). The DFlash and DSpark results agree. **Keep a drafter that already fits SWE outputs frozen.**
 
+![Model-call speedup of each frozen drafter (filled) and its online copy at draft lr 1e-4 (hollow). Online training lifts the Thinking DFlash K3 drafter from 1.01x to 1.32x. It lowers each SWE-trained drafter by 0.05-0.18x.](plots/swe_drafter_domain.png)
+
 ### The ready-first sampler turns the model-call gain into a step gain
 
 The SWE step waits for the slowest final eval of its prompts. Thus two rollout settings can help. A shorter final-eval timeout (600 s, against 1200 s) cuts the wait. The ready-first sampler of the V2 path does not wait. It trains on the groups that finish first and moves a slow group to a later step (`max_staleness_versions: 1`, `max_lookahead_versions: 1`). Each setting ran as a baseline and a frozen SWE-trained DSpark K8 arm. All four runs ran in one window (02:07-03:51 on 2026-10-24). The in_order control ran on 2026-10-23.
@@ -253,6 +259,10 @@ The SWE step waits for the slowest final eval of its prompts. Thus two rollout s
 | eval 450 s DSpark K8 | eval 450 s control | 31.7 | 1.98x [1.94, 2.02] | 202 | 92.3 | 148.7 | **1.22x [1.08, 1.38]** | 14/20 | 35% |
 
 The step spread is the standard deviation of the step time over its mean. The data is in [swe_variation.csv](data/swe_variation.csv) and [swe_time_breakdown.csv](data/swe_time_breakdown.csv).
+
+![Step time of each sampler setting, control (gray) and frozen DSpark K8 (orange), steps 1-20. With in_order, four 1200 s eval timeouts (shaded) set the step in both arms. With ready-first, the spikes go away, and DSpark K8 is below the control in most steps.](plots/swe_sampler_steps.png)
+
+The per-step data is in [swe_sampler_steps.csv](data/swe_sampler_steps.csv).
 
 **With the ready-first sampler, the SWE step gain is confirmed.** Frozen DSpark K8 gives 1.23x on the step, and it is faster in each of the 20 steps. The 90% interval is 1.19x to 1.28x. The model-call ratio is the same as with the in_order sampler (2.01x against 2.00x), and it does not drift (2.03x in steps 11-20). Ready-first cuts the step spread from 105-121% to 18%. Thus a step no longer depends on which prompts time out, and 20 steps can resolve the gain. Exposed generation drops from 157 s to 119 s, and that drop is most of the 40 s step gain.
 
@@ -365,6 +375,8 @@ The fixes cut time outside the model calls. SpecDec cuts the model calls. Thus t
 | Fixes and DSpark K8 (b0 / d5) | 1.24x [1.13, 1.34] | 31/40 | 1.25x | 1.22x | 2.00x | 1.48x | 1.59x | 1.42x |
 
 The step interval comes from a paired bootstrap that resamples steps within each replicate. Model calls and trajectory columns are means or quantiles over all trajectories from `swe_agent_timeline.py`.
+
+![Left: the mean trajectory time of each 2x2 arm, split into startup, model calls, tool execution, final eval and other agent time. Right: the mean step time, split into exposed generation and training plus other time. With DSpark K8, the L5 fixes cut the trajectory by 21 s (130 s to 109 s), but the step stays at 146-147 s.](plots/swe_trajectory.png)
 
 - **Per trajectory, the SpecDec gain grows on the faster baseline, as the projection says.** The mean gain goes from 1.24x to 1.28x, the median from 1.32x to 1.42x and the p90 from 1.21x to 1.26x. Both replicates agree.
 - **Per model call, the gain also grows a little: 1.94x to 2.08x.** The fixes do not change the model calls without a drafter (0.96x).
