@@ -59,6 +59,19 @@ The five items cut the non-model time of a trajectory. The drafter cuts only the
 
 SpecDec gain = step time of the b arm / step time of the d arm at the same level. The b0 and d0 arms need clones with no .pyc files in the OpenHands tree.
 
+## Admission depth
+
+The 2x2 timeline shows that the ready-first gate sets the step time. The gate admits one batch of 4 prompts per trainer step, with one batch of lookahead. At step start only 2.4 to 2.8 groups run, and the vLLM engines have about 2 requests each. The exposed generation time is approximately the span of the last group minus its age at step start.
+
+`rf_staleness2.yaml` sets `max_staleness_versions: 2`. The sampler then needs 12 buffer slots, so the in-flight and buffer caps go from 8 to 12. These three values change together as one axis. The cost is one more version of off-policy lag.
+
+| Arm | Drafter | Config |
+|---|---|---|
+| b0s2 | none | `swe_traj_l0_baseline_staleness2.yaml` |
+| d0s2 | DSpark K8 | `swe_traj_l0_control_staleness2.yaml` |
+
+Compare each arm with b0 or d0 of the 2x2.
+
 ## Notes
 
 - O1 writes .pyc files into the setup tree of the clone. A later control arm in that clone is not a control. Keep a clone with an uncompiled tree for L0.

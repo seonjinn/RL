@@ -1,0 +1,8 @@
+# Ready-first with two dispatch batches of lookahead instead of one. Compose it after ready_first.yaml.
+# The gated sampler holds num_prompts_per_step * (max_staleness_versions + 1) groups, so the
+# in-flight and buffer caps grow with the window. Together they are one axis: admission depth.
+async_rl:
+  sampler:
+    max_staleness_versions: 2
+  max_inflight_prompts: ${mul:${grpo.num_prompts_per_step}, 3}
+  max_buffered_rollouts: ${mul:${grpo.num_prompts_per_step}, 3}

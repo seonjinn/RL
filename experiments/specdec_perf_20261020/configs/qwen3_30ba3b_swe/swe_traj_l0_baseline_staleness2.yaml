@@ -1,0 +1,4 @@
+# b0 with two batches of ready-first admission lookahead. The only change from swe_traj_l0_baseline.yaml.
+defaults:
+  - swe_traj_l0_baseline.yaml
+  - rf_staleness2.yaml
