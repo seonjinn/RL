@@ -2751,7 +2751,10 @@ def test_megatron_train_runs_manual_gc_after_each_optimizer_step(worker_kind):
 
     def is_optimizer_step(stmt):
         # `... = self.optimizer.step()` as a statement of this block itself, not
-        # of a nested one (enclosing blocks contain it too).
+        # of a nested one (enclosing blocks contain it too). A `with` body runs
+        # once as part of its enclosing block, so look through it.
+        if isinstance(stmt, ast.With):
+            return any(is_optimizer_step(s) for s in stmt.body)
         return (
             isinstance(stmt, ast.Assign)
             and isinstance(stmt.value, ast.Call)
@@ -3553,6 +3556,9 @@ def test_worker_initialization_preserves_only_restored_rng(
             "_model_slices_context_parallel_inputs",
             "_model_accepts_media_token_validity_mask",
             "_reserved_http_server_port_for_rank",
+            "resolve_draft_speculator",
+            "_validate_draft_training_setup",
+            "draft_update_can_pause",
         )
     }
     runtime = MagicMock()
