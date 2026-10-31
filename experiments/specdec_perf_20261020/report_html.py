@@ -4,9 +4,12 @@
 
 One table per comparison group. Stage times are means over the report window
 (steps 3-20, SWE steps 1-20). Speedups are control / arm on the steps that both
-runs logged, so above 1x means the arm is faster.
+runs logged, so above 1x means the arm is faster. The V2 (single-controller) SWE
+runs have no W&B history, so their tables come from swe_driver_steps.csv
+(swe_driver_logs.py) and use steps 2 onward.
 """
 
+import csv
 import html
 import json
 import sys
@@ -23,6 +26,13 @@ TIMES = (
     ("step_s", "E2E step s"),
 )
 SPEEDUPS = (("pair_step_delta", "E2E speedup"), ("pair_gen_delta", "Gen speedup"))
+DRIVER_TIMES = (
+    ("exposed_generation_s", "Gen s"),
+    ("policy_training_s", "Train s"),
+    ("logprob_s", "LogProb s"),
+    ("weight_sync_s", "Refit s"),
+    ("total_s", "E2E step s"),
+)
 CSS = """
 :root {
   --surface: #fcfcfb; --ink: #0b0b0b; --muted: #52514e; --grid: #e4e3df;
@@ -142,6 +152,66 @@ def table(runs: list[dict]) -> str:
     )
 
 
+def driver_runs(path: Path) -> dict[str, dict[str, dict[int, dict[str, float]]]]:
+    # Run names are <cohort>-sc-<arm>, for example swe-tosd1030-sc-...-baseline-l0-staleness2
+    cohorts: dict[str, dict[str, dict[int, dict[str, float]]]] = {}
+    with open(path) as f:
+        for r in csv.DictReader(f):
+            cohort, arm = r["run"].split("-sc-", 1)
+            step = int(r["step"])
+            if step < 2:
+                continue
+            vals = {k: float(v) for k, v in r.items() if k not in ("run", "step") and v}
+            cohorts.setdefault(cohort, {}).setdefault(arm, {})[step] = vals
+    return cohorts
+
+
+def driver_row(arm: str, steps: dict[int, dict], ref: dict[int, dict] | None) -> str:
+    def avg(key: str, on: list[int]) -> float | None:
+        xs = [steps[s][key] for s in on if key in steps[s]]
+        return sum(xs) / len(xs) if xs else None
+
+    window = sorted(steps)
+    lags = [steps[s]["trainer_lag"] for s in window]
+    cells = [
+        f"<td>{html.escape(arm)}</td>",
+        f"<td>{min(window)}-{max(window)}</td>",
+        *(f"<td>{num(avg(key, window))}</td>" for key, _ in DRIVER_TIMES),
+        f"<td>{sum(lags) / len(lags):.2f}</td>",
+        f"<td>{max(lags):.0f}</td>",
+    ]
+    paired = sorted(set(steps) & set(ref)) if ref is not None else []
+    if len(paired) >= MIN_PAIRED:
+        ref_mean = sum(ref[s]["total_s"] for s in paired) / len(paired)
+        x = ref_mean / avg("total_s", paired)
+        tone = "good" if x >= 1.02 else ("bad" if x <= 0.98 else "")
+        cells.append(f'<td class="{tone}">{x:.2f}x</td>')
+    else:
+        cells.append("<td>-</td>")
+    return f"<tr>{''.join(cells)}</tr>"
+
+
+def driver_table(cohort: str, arms: dict[str, dict[int, dict]]) -> str:
+    heads = [
+        "Arm",
+        "Steps",
+        *(label for _, label in DRIVER_TIMES),
+        "Lag mean",
+        "Lag max",
+        "E2E speedup",
+    ]
+    head = "".join(f"<th>{h}</th>" for h in heads)
+    body = "\n".join(
+        driver_row(arm, arms[arm], None if arm == ref else arms.get(ref))
+        for arm in sorted(arms, key=lambda a: ("dspark" in a, a))
+        for ref in [arm.replace("dspark-k8", "baseline")]
+    )
+    return (
+        f"<h2>{html.escape(cohort)}: Qwen3-30B-A3B SWE, V2 driver logs</h2>\n"
+        f'<div class="wrap"><table><thead><tr>{head}</tr></thead>\n<tbody>\n{body}\n</tbody></table></div>'
+    )
+
+
 def main() -> None:
     src = Path(sys.argv[1]) if len(sys.argv) > 1 else HERE / "report/data/runs.json"
     out = Path(sys.argv[2]) if len(sys.argv) > 2 else HERE / "report/index.html"
@@ -149,6 +219,10 @@ def main() -> None:
     for run in json.loads(src.read_text()):
         groups.setdefault(run["group"], []).append(run)
     tables = "\n".join(table(groups[g]) for g in sorted(groups))
+    driver = src.parent / "swe_driver_steps.csv"
+    if driver.exists():
+        cohorts = driver_runs(driver)
+        tables += "\n" + "\n".join(driver_table(c, cohorts[c]) for c in sorted(cohorts))
     page = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -162,6 +236,8 @@ def main() -> None:
 <p>Stage times are means over steps 3-20 (SWE steps 1-20). Speedup is control step time over
 arm step time on the steps that both runs logged, shown when at least {MIN_PAIRED} steps pair.
 Above 1x means the arm is faster. SWE runs skip the logprob pass, so LogProb is 0 or about 1 ms.
+The V2 SWE tables at the end come from the driver logs and use steps 2 onward. Their speedup
+pairs each DSpark K8 run with the baseline run of the same cohort and fixes.
 The report text is in <a href="README.md">README.md</a>.</p>
 {tables}
 </body>

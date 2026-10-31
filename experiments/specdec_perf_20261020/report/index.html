@@ -39,6 +39,8 @@ a { color: inherit; }
 <p>Stage times are means over steps 3-20 (SWE steps 1-20). Speedup is control step time over
 arm step time on the steps that both runs logged, shown when at least 8 steps pair.
 Above 1x means the arm is faster. SWE runs skip the logprob pass, so LogProb is 0 or about 1 ms.
+The V2 SWE tables at the end come from the driver logs and use steps 2 onward. Their speedup
+pairs each DSpark K8 run with the baseline run of the same cohort and fixes.
 The report text is in <a href="README.md">README.md</a>.</p>
 <h2>n35: Nemotron 3.5 Lightning 30B-A3B, async, sync, default</h2>
 <div class="wrap"><table><thead><tr><th>Arm</th><th>Drafter</th><th>K</th><th>Steps</th><th>Gen s</th><th>Train s</th><th>LogProb s</th><th>Refit s</th><th>E2E step s</th><th>tok/s/GPU</th><th>Gen tok/s/GPU</th><th>Accept len</th><th>E2E speedup</th><th>Gen speedup</th><th>Control</th><th>State</th></tr></thead>
@@ -291,6 +293,28 @@ The report text is in <a href="README.md">README.md</a>.</p>
 <tr><td><a href="https://wandb.ai/nvidia/sna-async-grpo-gb200/runs/3nogyueg">baseline-v10</a></td><td class='text'>-</td><td>-</td><td>11</td><td>679.2</td><td>71.5</td><td>0.001</td><td>9.9</td><td>761.2</td><td>28.1</td><td>57.0</td><td>-</td><td>-</td><td>-</td><td class='text'>-</td><td class='text'>finished</td></tr>
 <tr><td><a href="https://wandb.ai/nvidia/sna-async-grpo-gb200/runs/mfl03vwr">frozen-dflash-k7-v10</a></td><td class='text'>DFlash frozen</td><td>7</td><td>14</td><td>581.3</td><td>72.3</td><td>0.001</td><td>10.2</td><td>664.5</td><td>31.9</td><td>64.8</td><td>1.37</td><td class="good">1.16x</td><td class="good">1.19x</td><td class='text'>baseline-v10</td><td class='text'>finished</td></tr>
 <tr><td><a href="https://wandb.ai/nvidia/sna-async-grpo-gb200/runs/bop3joyd">frozen-dspark-k8-v10</a></td><td class='text'>DSpark frozen</td><td>8</td><td>13</td><td>596.9</td><td>68.8</td><td>0.001</td><td>10.1</td><td>676.4</td><td>31.8</td><td>64.7</td><td>1.72</td><td class="good">1.12x</td><td class="good">1.13x</td><td class='text'>baseline-v10</td><td class='text'>finished</td></tr>
+</tbody></table></div>
+<h2>swe-gbs512-1031: Qwen3-30B-A3B SWE, V2 driver logs</h2>
+<div class="wrap"><table><thead><tr><th>Arm</th><th>Steps</th><th>Gen s</th><th>Train s</th><th>LogProb s</th><th>Refit s</th><th>E2E step s</th><th>Lag mean</th><th>Lag max</th><th>E2E speedup</th></tr></thead>
+<tbody>
+<tr><td>r16-t4-rf-eval450-drop4-regen-frozen-baseline-l5</td><td>2-16</td><td>215.2</td><td>117.7</td><td>31.6</td><td>7.3</td><td>377.5</td><td>2.00</td><td>3</td><td>-</td></tr>
+<tr><td>r16-t4-rf-eval450-drop4-regen-frozen-dspark-k8-l5</td><td>2-16</td><td>165.4</td><td>118.8</td><td>31.8</td><td>7.8</td><td>329.9</td><td>2.00</td><td>3</td><td class="good">1.14x</td></tr>
+</tbody></table></div>
+<h2>swe-tosd1024: Qwen3-30B-A3B SWE, V2 driver logs</h2>
+<div class="wrap"><table><thead><tr><th>Arm</th><th>Steps</th><th>Gen s</th><th>Train s</th><th>LogProb s</th><th>Refit s</th><th>E2E step s</th><th>Lag mean</th><th>Lag max</th><th>E2E speedup</th></tr></thead>
+<tbody>
+<tr><td>r16-rf-eval450-drop4-regen-frozen-baseline-l0-control</td><td>2-20</td><td>125.9</td><td>28.2</td><td>7.6</td><td>6.0</td><td>179.1</td><td>1.68</td><td>4</td><td>-</td></tr>
+<tr><td>r16-rf-eval450-drop4-regen-frozen-baseline-l0-control-r2</td><td>2-20</td><td>118.6</td><td>27.8</td><td>7.4</td><td>6.0</td><td>172.4</td><td>1.74</td><td>3</td><td>-</td></tr>
+<tr><td>r16-rf-eval450-drop4-regen-frozen-dspark-k8-l0-control</td><td>2-20</td><td>81.3</td><td>29.0</td><td>7.7</td><td>6.1</td><td>135.4</td><td>1.79</td><td>5</td><td class="good">1.32x</td></tr>
+<tr><td>r16-rf-eval450-drop4-regen-frozen-dspark-k8-l0-control-r2</td><td>2-20</td><td>92.6</td><td>28.7</td><td>7.6</td><td>6.1</td><td>146.9</td><td>1.95</td><td>4</td><td class="good">1.17x</td></tr>
+</tbody></table></div>
+<h2>swe-tosd1030: Qwen3-30B-A3B SWE, V2 driver logs</h2>
+<div class="wrap"><table><thead><tr><th>Arm</th><th>Steps</th><th>Gen s</th><th>Train s</th><th>LogProb s</th><th>Refit s</th><th>E2E step s</th><th>Lag mean</th><th>Lag max</th><th>E2E speedup</th></tr></thead>
+<tbody>
+<tr><td>r16-rf-eval450-drop4-regen-frozen-baseline-l0-staleness2</td><td>2-20</td><td>47.8</td><td>28.2</td><td>7.7</td><td>6.1</td><td>101.5</td><td>2.74</td><td>7</td><td>-</td></tr>
+<tr><td>r16-rf-eval450-drop4-regen-frozen-baseline-l0-staleness2-r2</td><td>2-20</td><td>52.8</td><td>29.3</td><td>7.9</td><td>6.3</td><td>108.9</td><td>2.89</td><td>6</td><td>-</td></tr>
+<tr><td>r16-rf-eval450-drop4-regen-frozen-dspark-k8-l0-staleness2</td><td>2-20</td><td>31.6</td><td>28.2</td><td>7.7</td><td>6.2</td><td>85.5</td><td>3.21</td><td>8</td><td class="good">1.19x</td></tr>
+<tr><td>r16-rf-eval450-drop4-regen-frozen-dspark-k8-l0-staleness2-r2</td><td>2-20</td><td>31.3</td><td>29.0</td><td>7.7</td><td>6.3</td><td>85.8</td><td>2.84</td><td>8</td><td class="good">1.27x</td></tr>
 </tbody></table></div>
 </body>
 </html>
