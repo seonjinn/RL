@@ -20,6 +20,7 @@ import sys
 import threading
 import urllib.parse
 import urllib.request
+import zlib
 from collections import Counter
 from collections.abc import AsyncGenerator, Mapping
 from dataclasses import dataclass, field
@@ -1072,6 +1073,26 @@ Depending on your data shape, you may want to change these values."""
             finally:
                 await inner.aclose()
 
+    async def prewarm_rollouts(self, nemo_gym_examples: list[dict]) -> int:
+        """Ask the agents to set up the environments of these rows ahead of dispatch.
+
+        Each row carries the ``_ng_prewarm_key`` it will also carry on its later
+        :meth:`run_rollouts` dispatch; an agent that supports prewarm builds the
+        environment now and holds before the first model call until that dispatch
+        adopts it. Best effort: an agent without prewarm support or a failed request
+        only means the row runs cold.
+
+        Returns:
+            How many rows the agents accepted.
+        """
+        self._require_spinup()
+        if not nemo_gym_examples:
+            return 0
+        normalize_media_in_examples(nemo_gym_examples)
+        return await self.rch.prewarm_examples(
+            examples=nemo_gym_examples, head_server_config=self.head_server_config
+        )
+
     async def _stream_rollouts(
         self,
         nemo_gym_examples: list[dict],
@@ -2123,7 +2144,7 @@ class NemoGymShardSet:
                 f"{sorted(self.route_to_shard)}."
             ) from None
 
-    def pick_handle(self, route_name: str) -> Any:
+    def pick_handle(self, route_name: str, affinity_key: Optional[str] = None) -> Any:
         """Choose the actor instance to serve a route's next prompt group.
 
         The shard is fixed by the data; the replica rotates round-robin. Round
@@ -2133,11 +2154,20 @@ class NemoGymShardSet:
         A least-in-flight policy would require callers to release a lease when
         each dispatch completes. That lifecycle is intentionally outside this
         round-robin implementation.
+
+        Args:
+            affinity_key: Pins the replica by a stable hash instead of the
+                rotation, so calls with the same key reach the same replica.
+                Env run-ahead needs this: the agent keeps a prewarmed
+                environment in its own process, and only the replica that
+                prewarmed it can adopt it.
         """
         shard_name = self.shard_for_route(route_name)
         replicas = self.handles[shard_name]
         if len(replicas) == 1:
             return replicas[0]
+        if affinity_key is not None:
+            return replicas[zlib.crc32(affinity_key.encode()) % len(replicas)]
         with self._replica_lock:
             index = self._next_replica.get(shard_name, 0)
             self._next_replica[shard_name] = (index + 1) % len(replicas)

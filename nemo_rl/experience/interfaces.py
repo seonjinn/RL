@@ -21,6 +21,11 @@ NEMO_GYM_TASK_INDEX_KEY = "_ng_task_index"
 NEMO_GYM_GROUP_ID_KEY = "_ng_group_id"
 NEMO_GYM_GROUP_ATTEMPT_KEY = "_ng_group_attempt"
 NEMO_GYM_ROLLOUT_INDEX_KEY = "_ng_rollout_index"
+# Env run-ahead: the pump stamps a prewarm id on a prompt; the rollout manager turns
+# it into one opaque key per generation row, so Gym can match the prewarm request to
+# the later real dispatch of the same row.
+NEMO_GYM_PREWARM_ID_KEY = "_ng_prewarm_id"
+NEMO_GYM_PREWARM_KEY = "_ng_prewarm_key"
 NEXT_NEMO_GYM_TASK_INDEX_KEY = "next_ng_task_index"
 # Unconsumed suffix of a gap-fill dataloader batch, carried in the async
 # collector's rollouts state so a checkpoint cannot strand yielded prompts.

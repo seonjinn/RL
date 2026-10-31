@@ -169,6 +169,7 @@ from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.distributed.refit_watchdog import RefitAborted, is_refit_context_lost
 from nemo_rl.environments.nemo_gym import should_use_nemo_gym
 from nemo_rl.experience.failures import RolloutStall
+from nemo_rl.experience.interfaces import NEMO_GYM_PREWARM_ID_KEY
 from nemo_rl.experience.payload import VIOLATION_TAG_KEYS
 from nemo_rl.experience.reward_penalties import (
     CaptureRewardSettings,
@@ -2529,16 +2530,20 @@ class SingleControllerActor:
                     for prompt_batch in self._dataloader:
                         if self._divert_batch_to_reserve(prompt_batch):
                             continue
+                        prompts = self._mark_for_prewarm(
+                            [
+                                {k: v[prompt_idx] for k, v in prompt_batch.items()}  # type: ignore
+                                for prompt_idx in range(prompt_batch.size)
+                            ]
+                        )
+                        await self._prewarm_held_prompts(prompts)
                         target_step = await self._sampler.admit(
                             trainer_version_fn=lambda: self._trainer_version
                         )
                         if target_step is not None:
                             self._sampler_stamps_target_steps = True
                         self._require_unoccupied_target_step(target_step)
-                        for prompt_idx in range(prompt_batch.size):
-                            prompt: DatumSpec = {  # type: ignore
-                                k: v[prompt_idx] for k, v in prompt_batch.items()
-                            }
+                        for prompt in prompts:
                             await _launch(prompt, target_step, None)
                     self._current_epoch += 1
                     continue
@@ -2557,10 +2562,13 @@ class SingleControllerActor:
                         if self._divert_batch_to_reserve(prompt_batch):
                             continue
                         admission_id = str(uuid.uuid4())
-                        for prompt_idx in range(prompt_batch.size):
-                            prompt = {  # type: ignore
-                                k: v[prompt_idx] for k, v in prompt_batch.items()
-                            }
+                        prompts = self._mark_for_prewarm(
+                            [
+                                {k: v[prompt_idx] for k, v in prompt_batch.items()}  # type: ignore
+                                for prompt_idx in range(prompt_batch.size)
+                            ]
+                        )
+                        for prompt in prompts:
                             group_id = self._rollout_manager.reserve_prompt_group(
                                 cut,
                                 prompt,
@@ -2570,6 +2578,10 @@ class SingleControllerActor:
                             )
                             prompt_dispatches.append((prompt, group_id))
 
+                    # Outside the mutation: a checkpoint must not wait on agent I/O.
+                    await self._prewarm_held_prompts(
+                        [prompt for prompt, _ in prompt_dispatches]
+                    )
                     target_step = await self._admit_reserved_prompt_groups(
                         [group_id for _, group_id in prompt_dispatches]
                     )
@@ -2592,6 +2604,50 @@ class SingleControllerActor:
 
         self._rollout_exhausted.set()
         print(f"rollout_pump: completed {self._current_epoch} epoch(s)", flush=True)
+
+    def _mark_for_prewarm(self, prompts: list[DatumSpec]) -> list[DatumSpec]:
+        """Stamp a prewarm id on the first ``env_run_ahead.max_prompts`` prompts.
+
+        Stamped prompts are copies: the dataloader can hand out the same
+        extra_env_info dict again in a later epoch, and that dispatch needs its
+        own id. A no-op when env run-ahead is off.
+        """
+        run_ahead = self._async_cfg.env_run_ahead
+        if not run_ahead.enabled:
+            return prompts
+        return [
+            {  # type: ignore
+                **prompt,
+                "extra_env_info": {
+                    **prompt["extra_env_info"],
+                    NEMO_GYM_PREWARM_ID_KEY: uuid.uuid4().hex,
+                },
+            }
+            if index < run_ahead.max_prompts
+            else prompt
+            for index, prompt in enumerate(prompts)
+        ]
+
+    async def _prewarm_held_prompts(self, prompts: list[DatumSpec]) -> None:
+        """Start environment setup for stamped prompts before the gate admits them.
+
+        Called before ``admit``, so setup overlaps the wait for the trainer. Awaited
+        rather than fired off so the prewarm request reaches the agent before the
+        dispatch it pairs with; the requests only start setup, so this is one
+        round-trip.
+        """
+        if not self._async_cfg.env_run_ahead.enabled:
+            return
+        stamped = [
+            prompt
+            for prompt in prompts
+            if NEMO_GYM_PREWARM_ID_KEY in prompt["extra_env_info"]
+        ]
+        if not stamped:
+            return
+        await self._rollout_manager.prewarm(
+            stamped, timeout_s=self._async_cfg.env_run_ahead.prewarm_timeout_s
+        )
 
     def _divert_batch_to_reserve(
         self, prompt_batch: BatchedDataDict[DatumSpec]

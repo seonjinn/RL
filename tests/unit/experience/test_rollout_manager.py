@@ -30,6 +30,7 @@ import tempfile
 import uuid
 from copy import deepcopy
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import torch
@@ -46,10 +47,13 @@ from nemo_rl.data.multimodal_utils import PackedTensor
 from nemo_rl.data.processors import nemo_gym_data_processor
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.environments.interfaces import EnvironmentReturn
+from nemo_rl.environments.nemo_gym import NemoGymShardSet
 from nemo_rl.experience.failures import GenerationUnavailable
 from nemo_rl.experience.interfaces import (
     NEMO_GYM_GROUP_ATTEMPT_KEY,
     NEMO_GYM_GROUP_ID_KEY,
+    NEMO_GYM_PREWARM_ID_KEY,
+    NEMO_GYM_PREWARM_KEY,
     NEMO_GYM_ROLLOUT_INDEX_KEY,
     Completion,
     PromptGroupRecord,
@@ -1409,6 +1413,125 @@ def test_nemo_gym_build_inputs_preserves_explicit_group_identity():
     ]
     assert [row[NEMO_GYM_GROUP_ATTEMPT_KEY] for row in rows] == [2, 2]
     assert [row[NEMO_GYM_ROLLOUT_INDEX_KEY] for row in rows] == [0, 1]
+
+
+def _prewarm_sample(prewarm_id: str | None) -> dict:
+    extra_env_info = {"responses_create_params": {}, "agent_ref": {"name": "swe"}}
+    if prewarm_id is not None:
+        extra_env_info[NEMO_GYM_PREWARM_ID_KEY] = prewarm_id
+    return {"extra_env_info": extra_env_info}
+
+
+def _prewarm_replica(accepted: int) -> MagicMock:
+    replica = MagicMock()
+    replica.prewarm_rollouts.remote = AsyncMock(return_value=accepted)
+    return replica
+
+
+def test_nemo_gym_build_inputs_keys_each_generation_by_prewarm_id():
+    impl = _nemo_gym_impl(True)
+    impl._num_generations_per_prompt = 3
+    input_sample = _prewarm_sample("pw")
+
+    rows = impl._build_inputs(input_sample)
+
+    assert [row[NEMO_GYM_PREWARM_KEY] for row in rows] == ["pw/0", "pw/1", "pw/2"]
+    assert all(NEMO_GYM_PREWARM_ID_KEY not in row for row in rows)
+    assert input_sample["extra_env_info"][NEMO_GYM_PREWARM_ID_KEY] == "pw"
+
+
+def test_nemo_gym_build_inputs_keeps_the_prewarm_key_on_a_row_redispatch():
+    """A retried row must still find the environment its generation prewarmed."""
+    impl = _nemo_gym_impl(True)
+    impl._num_generations_per_prompt = 3
+
+    rows = impl._build_inputs(_prewarm_sample("pw"), generation_indices=[2])
+
+    assert [row[NEMO_GYM_PREWARM_KEY] for row in rows] == ["pw/2"]
+
+
+def test_nemo_gym_build_inputs_without_prewarm_id_sets_no_key():
+    impl = _nemo_gym_impl(True)
+    impl._num_generations_per_prompt = 2
+
+    rows = impl._build_inputs(_prewarm_sample(None))
+
+    assert all(NEMO_GYM_PREWARM_KEY not in row for row in rows)
+
+
+def test_nemo_gym_prewarm_and_dispatch_reach_the_same_replica():
+    """The agent holds the prewarmed environment in its own process."""
+    replicas = [_prewarm_replica(3) for _ in range(4)]
+    impl = _nemo_gym_impl(True)
+    impl._num_generations_per_prompt = 3
+    impl._task_to_env = {"nemo_gym": NemoGymShardSet(handles={"swe": replicas})}
+    input_sample = _prewarm_sample("pw")
+
+    assert _run(impl.prewarm(input_sample)) == 3
+
+    called = [r for r in replicas if r.prewarm_rollouts.remote.await_count]
+    assert len(called) == 1
+    (rows,) = called[0].prewarm_rollouts.remote.call_args.args
+    assert [row[NEMO_GYM_PREWARM_KEY] for row in rows] == ["pw/0", "pw/1", "pw/2"]
+    for indices in (None, [1]):
+        rows = impl._build_inputs(input_sample, generation_indices=indices)
+        assert impl._pick_env(rows)[1] is called[0]
+
+
+def test_nemo_gym_prewarm_without_prewarm_id_is_rejected():
+    impl = _nemo_gym_impl(True)
+    with pytest.raises(ValueError, match=NEMO_GYM_PREWARM_ID_KEY):
+        _run(impl.prewarm(_prewarm_sample(None)))
+
+
+class TestRolloutManagerPrewarm:
+    """Prewarm is best effort: nothing it does can fail the run."""
+
+    @staticmethod
+    def _manager(prewarm) -> RolloutManager:
+        impl = _nemo_gym_impl(True)
+        impl.prewarm = prewarm
+        manager = _make_manager(_FakeBuffer(), impl)
+        manager._num_generations_per_prompt = 2
+        return manager
+
+    def test_it_counts_the_generations_the_agents_accepted(self):
+        manager = self._manager(AsyncMock(side_effect=[2, 1]))
+
+        assert _run(manager.prewarm([{"idx": 0}, {"idx": 1}], timeout_s=5.0)) == 3
+
+        metrics = manager._stats.as_metrics()
+        assert metrics["rollout/prewarm_requested_total"] == 4.0
+        assert metrics["rollout/prewarm_accepted_total"] == 3.0
+
+    def test_a_failed_prompt_runs_cold_and_the_rest_still_count(self):
+        manager = self._manager(AsyncMock(side_effect=[RuntimeError("agent down"), 2]))
+
+        assert _run(manager.prewarm([{"idx": 0}, {"idx": 1}], timeout_s=5.0)) == 2
+        assert manager._stats.prewarm_accepted == 2
+
+    def test_a_hung_agent_is_cut_off_by_the_timeout(self):
+        async def hang(_sample):
+            await asyncio.Event().wait()
+
+        manager = self._manager(hang)
+
+        assert _run(manager.prewarm([{"idx": 0}], timeout_s=0.01)) == 0
+        assert manager._stats.prewarm_requested == 2
+        assert manager._stats.prewarm_accepted == 0
+
+    def test_no_prompts_sends_nothing(self):
+        prewarm = AsyncMock()
+        manager = self._manager(prewarm)
+
+        assert _run(manager.prewarm([], timeout_s=5.0)) == 0
+        prewarm.assert_not_called()
+        assert manager._stats.prewarm_requested == 0
+
+    def test_the_native_path_is_rejected(self):
+        manager = _make_manager(_FakeBuffer(), _FakeImpl())
+        with pytest.raises(TypeError, match="NeMo-Gym"):
+            _run(manager.prewarm([{"idx": 0}], timeout_s=5.0))
 
 
 # ---------------------------------------------------------------------------

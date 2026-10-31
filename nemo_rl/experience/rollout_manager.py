@@ -60,6 +60,8 @@ from nemo_rl.experience.failures import (
 from nemo_rl.experience.interfaces import (
     NEMO_GYM_GROUP_ATTEMPT_KEY,
     NEMO_GYM_GROUP_ID_KEY,
+    NEMO_GYM_PREWARM_ID_KEY,
+    NEMO_GYM_PREWARM_KEY,
     NEMO_GYM_ROLLOUT_INDEX_KEY,
     Completion,
     PromptGroupRecord,
@@ -247,6 +249,10 @@ class RolloutStats:
     # redoing the whole thing, so they never reached the counters above and gym could
     # retry rows all run with redispatch_total sitting flat.
     gym_row_redispatches: int = 0
+    # Env run-ahead: generations asked to prewarm, and how many the agents took. A gap
+    # means rollouts ran cold (agent without prewarm support, full registry, failure).
+    prewarm_requested: int = 0
+    prewarm_accepted: int = 0
 
     def record_redispatch(self, reason: str) -> None:
         self.redispatches_by_reason[reason] = (
@@ -291,6 +297,8 @@ class RolloutStats:
                 sum(self.data_failures_by_reason.values())
             ),
             "rollout/gym_row_redispatch_total": float(self.gym_row_redispatches),
+            "rollout/prewarm_requested_total": float(self.prewarm_requested),
+            "rollout/prewarm_accepted_total": float(self.prewarm_accepted),
             "rollout/infra_drops_total": float(
                 sum(self.infra_drops_by_reason.values())
             ),
@@ -1053,6 +1061,7 @@ class AsyncNemoGymRolloutImpl:
                 "NeMo-Gym resolved one prompt group to inconsistent agent_ref values"
             )
         record_extra_env_info = copy.deepcopy(input_sample["extra_env_info"])
+        record_extra_env_info.pop(NEMO_GYM_PREWARM_ID_KEY, None)
         record_extra_env_info["agent_ref"] = copy.deepcopy(resolved_agent_ref)
 
         return PromptGroupRecord(
@@ -1089,6 +1098,7 @@ class AsyncNemoGymRolloutImpl:
         """Build N row dicts from input_sample, applying generation config params."""
         # Build a template row from the input_sample's extra_env_info, applying generation params.
         template_row: dict = copy.deepcopy(input_sample["extra_env_info"])  # type: ignore
+        prewarm_id = template_row.pop(NEMO_GYM_PREWARM_ID_KEY, None)
 
         # We do not translate max_seq_len into row-level max_tokens here because that would
         # change semantics from "total sequence length" to "max new tokens".
@@ -1143,8 +1153,46 @@ class AsyncNemoGymRolloutImpl:
                 # derives the id from the run body and stamps /ng-rollout/<id>
                 # on every model call, so the TQ sample id IS the capture key.
                 row["_ng_rollout_id"] = rollout_ids[i]
+            if prewarm_id is not None:
+                # Same key on the prewarm row and on every dispatch of this
+                # generation, so the agent can adopt the environment it prewarmed.
+                row[NEMO_GYM_PREWARM_KEY] = f"{prewarm_id}/{i}"
             rows.append(row)
         return rows
+
+    def _pick_env(self, rows: list[dict]) -> tuple[Any, Any]:
+        """Pick the NeMo-Gym actor for one prompt's rows; returns (shard_set, handle).
+
+        A prewarmed prompt pins its replica by prewarm id: the agent holds the
+        prewarmed environment in its own process, so the prewarm and the real
+        dispatch must reach the same replica.
+        """
+        shard_set = as_nemo_gym_shard_set(self._task_to_env["nemo_gym"])
+        prewarm_key = rows[0].get(NEMO_GYM_PREWARM_KEY)
+        affinity_key = (
+            prewarm_key.rsplit("/", 1)[0] if isinstance(prewarm_key, str) else None
+        )
+        handle = shard_set.pick_handle(
+            get_nemo_gym_route_name(rows[0]), affinity_key=affinity_key
+        )
+        return shard_set, handle
+
+    async def prewarm(self, input_sample: DatumSpec) -> int:
+        """Ask NeMo-Gym to set up this prompt's environments ahead of its dispatch.
+
+        ``input_sample`` must carry ``_ng_prewarm_id`` in its extra_env_info; the
+        later :meth:`run_rollout` of the same sample adopts what this started.
+
+        Returns:
+            How many of the prompt's generations the agent accepted.
+        """
+        if NEMO_GYM_PREWARM_ID_KEY not in input_sample["extra_env_info"]:
+            raise ValueError(
+                f"prewarm needs {NEMO_GYM_PREWARM_ID_KEY} in extra_env_info"
+            )
+        rows = self._build_inputs(input_sample)
+        _, nemo_gym_env = self._pick_env(rows)
+        return await nemo_gym_env.prewarm_rollouts.remote(rows)
 
     async def _stream_rows(
         self,
@@ -1253,8 +1301,7 @@ class AsyncNemoGymRolloutImpl:
             raise ValueError("NeMo-Gym rollout dispatch requires at least one row")
         # These rows are all one prompt's generations.
         # They share one Gym route and must stay on one instance.
-        shard_set = as_nemo_gym_shard_set(self._task_to_env["nemo_gym"])
-        nemo_gym_env = shard_set.pick_handle(get_nemo_gym_route_name(inputs[0]))
+        shard_set, nemo_gym_env = self._pick_env(inputs)
         instance_label = shard_set.instance_label(nemo_gym_env)
         instance_timer_prefix = f"{timer_prefix}/shard/{instance_label}"
         total_rows = self._num_generations_per_prompt
@@ -1915,6 +1962,47 @@ class RolloutManager:
             on_completion=on_completion,
             recovery_granularity=recovery_granularity,
         )
+
+    async def prewarm(self, input_samples: list[DatumSpec], timeout_s: float) -> int:
+        """Prewarm the environments of prompts the staleness gate still holds.
+
+        Best effort: run-ahead only moves environment setup earlier, so a failure
+        or timeout here never fails the run; the prompts then run cold.
+
+        Returns:
+            How many generations the agents accepted.
+        """
+        if not input_samples:
+            return 0
+        if not isinstance(self._impl, AsyncNemoGymRolloutImpl):
+            raise TypeError("env run-ahead prewarm needs the NeMo-Gym rollout path")
+        num_prompts = len(input_samples)
+        self._stats.prewarm_requested += num_prompts * self._num_generations_per_prompt
+        try:
+            async with asyncio.timeout(timeout_s):
+                results = await asyncio.gather(
+                    *(self._impl.prewarm(sample) for sample in input_samples),
+                    return_exceptions=True,
+                )
+        except TimeoutError:
+            print(
+                f"[env_run_ahead] prewarm of {num_prompts} prompts timed out after "
+                f"{timeout_s}s; they run cold",
+                flush=True,
+            )
+            return 0
+        failures = [result for result in results if isinstance(result, BaseException)]
+        if failures:
+            print(
+                f"[env_run_ahead] prewarm failed for {len(failures)} of {num_prompts} "
+                f"prompts; they run cold: {type(failures[0]).__name__}: {failures[0]}",
+                flush=True,
+            )
+        accepted = sum(
+            result for result in results if not isinstance(result, BaseException)
+        )
+        self._stats.prewarm_accepted += accepted
+        return accepted
 
     async def generate_and_push(
         self,

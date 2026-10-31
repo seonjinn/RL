@@ -32,6 +32,7 @@ from nemo_rl.algorithms.loss import ClippedPGLossConfig
 from nemo_rl.algorithms.ppo import PPOConfig
 from nemo_rl.algorithms.single_controller_utils.config import (
     AsyncRLConfig,
+    EnvRunAheadConfig,
     FleetHealthConfig,
     GenerationRouterConfig,
     MasterConfig,
@@ -790,3 +791,56 @@ class TestADropBudgetNeedsASamplerThatStamps:
             rollout_failure={"max_consecutive_dropped_prompts": 2},
         )
         validate_single_controller_config(cfg)
+
+
+class TestEnvRunAheadValidation:
+    """Run-ahead only helps on the NeMo-Gym path, so every other setup is rejected."""
+
+    @staticmethod
+    def _enabled(max_prompts: int = 4, **kwargs) -> MasterConfig:
+        return _master_config(
+            env_run_ahead={"enabled": True, "max_prompts": max_prompts}, **kwargs
+        )
+
+    def test_it_is_off_by_default(self):
+        cfg = AsyncRLConfig().env_run_ahead
+        assert cfg.enabled is False
+        assert cfg.max_prompts == 0
+        assert cfg.prewarm_timeout_s == 60.0
+
+    def test_the_default_passes_on_a_native_run(self):
+        cfg = _master_config()
+        cfg.env = {"should_use_nemo_gym": False}
+        validate_single_controller_config(cfg)
+
+    def test_enabled_without_a_prompt_budget_is_rejected(self):
+        with pytest.raises(ValidationError, match="max_prompts >= 1"):
+            EnvRunAheadConfig(enabled=True)
+
+    @pytest.mark.parametrize(
+        "field, value", [("max_prompts", -1), ("prewarm_timeout_s", 0.0)]
+    )
+    def test_out_of_range_values_are_rejected(self, field, value):
+        with pytest.raises(ValidationError, match=field):
+            EnvRunAheadConfig(**{field: value})
+
+    @pytest.mark.parametrize("max_prompts", [1, 8])
+    def test_a_gym_run_is_accepted(self, max_prompts):
+        validate_single_controller_config(self._enabled(max_prompts))
+
+    def test_a_native_run_is_rejected(self):
+        cfg = self._enabled()
+        cfg.env = {"should_use_nemo_gym": False}
+        with pytest.raises(ValueError, match="NeMo-Gym rollout path"):
+            validate_single_controller_config(cfg)
+
+    def test_token_capture_is_rejected(self):
+        cfg = self._enabled()
+        cfg.token_capture = cfg.token_capture.model_copy(update={"enabled": True})
+        with pytest.raises(ValueError, match="does not support token_capture"):
+            validate_single_controller_config(cfg)
+
+    def test_more_prompts_than_a_batch_holds_is_rejected(self):
+        cfg = self._enabled(max_prompts=9, num_prompts_per_step=8)
+        with pytest.raises(ValueError, match="exceeds num_prompts_per_step"):
+            validate_single_controller_config(cfg)

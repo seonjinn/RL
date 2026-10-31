@@ -1293,6 +1293,32 @@ def test_a_replicated_shard_labels_each_instance_apart():
         shard_set.instance_label(MagicMock())
 
 
+def test_an_affinity_key_pins_the_replica_without_moving_the_rotation():
+    """Env run-ahead: prewarm and dispatch of one prompt must meet on one replica."""
+    replicas = [MagicMock() for _ in range(4)]
+    shard_set = nemo_gym_mod.NemoGymShardSet(handles={"tools": replicas})
+
+    pinned = shard_set.pick_handle("tools", affinity_key="prewarm-a")
+    assert all(
+        shard_set.pick_handle("tools", affinity_key="prewarm-a") is pinned
+        for _ in range(8)
+    )
+    assert shard_set.pick_handle("tools") is replicas[0]
+    assert shard_set.pick_handle("tools") is replicas[1]
+    spread = {
+        id(shard_set.pick_handle("tools", affinity_key=f"prewarm-{i}"))
+        for i in range(64)
+    }
+    assert len(spread) == len(replicas)
+
+
+def test_an_affinity_key_on_a_single_replica_returns_it():
+    handle = MagicMock()
+    shard_set = nemo_gym_mod.NemoGymShardSet(handles={"tools": [handle]})
+
+    assert shard_set.pick_handle("tools", affinity_key="prewarm-a") is handle
+
+
 def test_an_unreplicated_shard_is_labelled_by_its_name_alone():
     """Names a metric and its log directory the same way."""
     handle = MagicMock()

@@ -37,7 +37,10 @@ from nemo_rl.algorithms.single_controller import (
     DATA_PLANE_CHECKPOINT_DIR,
     SingleControllerActor,
 )
-from nemo_rl.algorithms.single_controller_utils.config import RolloutRecoveryConfig
+from nemo_rl.algorithms.single_controller_utils.config import (
+    EnvRunAheadConfig,
+    RolloutRecoveryConfig,
+)
 from nemo_rl.data_plane.adapters.noop import NoOpDataPlaneClient
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.experience.failures import RolloutDataFailure
@@ -212,6 +215,7 @@ def _controller(
         max_inflight_prompts=16,
         max_buffered_rollouts=_CAPACITY,
         diagnostics=False,
+        env_run_ahead=EnvRunAheadConfig(),
         sampler=SimpleNamespace(name="in_order"),
         rollout_failure=SimpleNamespace(
             on_dropped_prompt="replace",

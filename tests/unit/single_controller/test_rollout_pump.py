@@ -46,11 +46,13 @@ from nemo_rl.algorithms.metric_utils import SetupTimingMetrics
 from nemo_rl.algorithms.single_controller import SingleControllerActor
 from nemo_rl.algorithms.single_controller_utils.config import (
     AsyncRLConfig,
+    EnvRunAheadConfig,
     MasterConfig,
     RolloutRecoveryConfig,
 )
 from nemo_rl.algorithms.single_controller_utils.setup import SingleControllerActorArgs
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
+from nemo_rl.experience.interfaces import NEMO_GYM_PREWARM_ID_KEY
 from nemo_rl.experience.rollout_manager import RolloutManager, RolloutOutcome
 from nemo_rl.experience.rollout_recovery import (
     RolloutRecoveryLedger,
@@ -199,6 +201,7 @@ def test_rollout_pump_stamps_target_steps(
     ctrl._async_cfg = SimpleNamespace(
         max_inflight_prompts=2,
         diagnostics=False,
+        env_run_ahead=EnvRunAheadConfig(),
         rollout_failure=_failure_cfg(),
     )
     ctrl._master_config = SimpleNamespace(
@@ -231,6 +234,139 @@ def test_rollout_pump_stamps_target_steps(
     assert ctrl._rollout_exhausted.is_set()
 
 
+class _PrewarmRecordingRolloutManager(_RecordingRolloutManager):
+    """Records each prewarm request next to the prompts the pump then launches."""
+
+    def __init__(self, buffer: _RecordingBuffer, events: list[str]) -> None:
+        super().__init__(buffer)
+        self.events = events
+        self.prewarm_timeouts: list[float] = []
+        self.prewarmed_ids: list[str] = []
+        self.launched: list[Any] = []
+
+    async def prewarm(self, prompts: list[Any], *, timeout_s: float) -> int:
+        self.events.append("prewarm")
+        self.prewarm_timeouts.append(timeout_s)
+        self.prewarmed_ids.extend(
+            prompt["extra_env_info"][NEMO_GYM_PREWARM_ID_KEY] for prompt in prompts
+        )
+        return len(prompts)
+
+    async def generate_and_push(self, prompt: Any, **kwargs: Any) -> None:
+        self.launched.append(prompt)
+        await super().generate_and_push(prompt, **kwargs)
+
+
+class _AdmitRecordingSampler(InOrderSampler):
+    def __init__(self, buffer: _RecordingBuffer, events: list[str]) -> None:
+        super().__init__(buffer, max_lookahead_versions=1)
+        self._events = events
+
+    async def admit(self, *, trainer_version_fn) -> int | None:
+        self._events.append("admit")
+        return await super().admit(trainer_version_fn=trainer_version_fn)
+
+
+def _run_ahead_pump(
+    env_run_ahead: EnvRunAheadConfig, prompt_batch: BatchedDataDict
+) -> tuple[Any, _PrewarmRecordingRolloutManager, list[str]]:
+    """A non-recovery pump over two copies of ``prompt_batch``, as two epochs reuse it."""
+    events: list[str] = []
+    buffer = _RecordingBuffer()
+    controller_cls = SingleControllerActor.__ray_metadata__.modified_class
+    ctrl = object.__new__(controller_cls)
+    ctrl._buffer = buffer
+    ctrl._async_cfg = SimpleNamespace(
+        max_inflight_prompts=8,
+        diagnostics=False,
+        env_run_ahead=env_run_ahead,
+        rollout_failure=_failure_cfg(),
+    )
+    ctrl._master_config = SimpleNamespace(
+        grpo=GRPOConfig.model_construct(max_num_epochs=1)
+    )
+    ctrl._algo_cfg = ctrl._master_config.grpo
+    manager = _PrewarmRecordingRolloutManager(buffer, events)
+    ctrl._rollout_manager = manager
+    ctrl._finalizer_actors = []
+    ctrl._sampler = _AdmitRecordingSampler(buffer, events)
+    ctrl._dataloader = [prompt_batch, prompt_batch]
+    ctrl._rollout_permitted = asyncio.Event()
+    ctrl._rollout_permitted.set()
+    ctrl._rollout_exhausted = asyncio.Event()
+    ctrl._buffer_capacity = asyncio.Semaphore(16)
+    ctrl._inflight_rollouts = 0
+    ctrl._inflight_by_group_id = {}
+    ctrl._dispatched_rollouts = set()
+    ctrl._trainer_version = 0
+    ctrl._current_epoch = 0
+    _init_pump_ledgers(ctrl)
+    return ctrl, manager, events
+
+
+def _env_batch(num_prompts: int) -> BatchedDataDict:
+    return BatchedDataDict(
+        {
+            "message_log": [
+                [{"role": "user", "content": f"prompt {i}"}] for i in range(num_prompts)
+            ],
+            "extra_env_info": [{"task": i} for i in range(num_prompts)],
+        }
+    )
+
+
+class TestEnvRunAheadPump:
+    """The pump prewarms a batch before the gate admits it, then launches the same ids."""
+
+    def test_prewarm_runs_before_each_admission(self):
+        prompt_batch = _env_batch(3)
+        ctrl, manager, events = _run_ahead_pump(
+            EnvRunAheadConfig(enabled=True, max_prompts=2, prewarm_timeout_s=7.0),
+            prompt_batch,
+        )
+
+        asyncio.run(ctrl._rollout_pump())
+
+        assert events == ["prewarm", "admit", "prewarm", "admit"]
+        assert manager.prewarm_timeouts == [7.0, 7.0]
+
+    def test_launches_carry_the_ids_that_were_prewarmed(self):
+        prompt_batch = _env_batch(3)
+        ctrl, manager, _ = _run_ahead_pump(
+            EnvRunAheadConfig(enabled=True, max_prompts=2), prompt_batch
+        )
+
+        asyncio.run(ctrl._rollout_pump())
+
+        launched_ids = [
+            prompt["extra_env_info"].get(NEMO_GYM_PREWARM_ID_KEY)
+            for prompt in manager.launched
+        ]
+        stamped = [prewarm_id for prewarm_id in launched_ids if prewarm_id]
+        assert sorted(stamped) == sorted(manager.prewarmed_ids)
+        # Only the first max_prompts of each batch, and a reused batch gets new ids.
+        assert len(stamped) == 4
+        assert len(set(stamped)) == 4
+        assert launched_ids.count(None) == 2
+        # Stamping copies: the dataloader's dicts stay clean for the next epoch.
+        assert all(
+            NEMO_GYM_PREWARM_ID_KEY not in info
+            for info in prompt_batch["extra_env_info"]
+        )
+
+    def test_disabled_sends_no_prewarm_and_stamps_nothing(self):
+        ctrl, manager, events = _run_ahead_pump(EnvRunAheadConfig(), _env_batch(3))
+
+        asyncio.run(ctrl._rollout_pump())
+
+        assert events == ["admit", "admit"]
+        assert len(manager.launched) == 6
+        assert all(
+            NEMO_GYM_PREWARM_ID_KEY not in prompt["extra_env_info"]
+            for prompt in manager.launched
+        )
+
+
 @pytest.mark.parametrize(
     ("outcome", "expect_permit_released"),
     [
@@ -260,7 +396,10 @@ def test_rollout_pump_releases_capacity_only_for_uncommitted_prompts(
     controller_cls = SingleControllerActor.__ray_metadata__.modified_class
     ctrl = object.__new__(controller_cls)
     ctrl._async_cfg = SimpleNamespace(
-        max_inflight_prompts=2, diagnostics=False, rollout_failure=_failure_cfg()
+        max_inflight_prompts=2,
+        diagnostics=False,
+        env_run_ahead=EnvRunAheadConfig(),
+        rollout_failure=_failure_cfg(),
     )
     ctrl._master_config = SimpleNamespace(
         grpo=GRPOConfig.model_construct(max_num_epochs=1)
@@ -371,7 +510,10 @@ def test_rollout_pump_credits_shortfall_only_for_stamped_prompts(
     ctrl = object.__new__(controller_cls)
     ctrl._buffer = buffer
     ctrl._async_cfg = SimpleNamespace(
-        max_inflight_prompts=2, diagnostics=False, rollout_failure=_failure_cfg()
+        max_inflight_prompts=2,
+        diagnostics=False,
+        env_run_ahead=EnvRunAheadConfig(),
+        rollout_failure=_failure_cfg(),
     )
     ctrl._master_config = SimpleNamespace(
         grpo=GRPOConfig.model_construct(max_num_epochs=1)
@@ -446,6 +588,7 @@ def _pump_controller(
     ctrl._async_cfg = SimpleNamespace(
         max_inflight_prompts=2,
         diagnostics=False,
+        env_run_ahead=EnvRunAheadConfig(),
         rollout_failure=_failure_cfg(
             on_dropped_prompt=on_dropped_prompt,
             max_replacement_attempts=max_replacement_attempts,
@@ -1000,6 +1143,7 @@ def test_rollout_pump_failure_cancels_sibling_and_releases_capacity() -> None:
         ctrl._async_cfg = SimpleNamespace(
             max_inflight_prompts=2,
             diagnostics=False,
+            env_run_ahead=EnvRunAheadConfig(),
             rollout_failure=_failure_cfg(),
         )
         ctrl._master_config = SimpleNamespace(
@@ -1090,6 +1234,7 @@ def test_rollout_pump_releases_permits_when_child_never_starts(monkeypatch) -> N
         ctrl._async_cfg = SimpleNamespace(
             max_inflight_prompts=1,
             diagnostics=False,
+            env_run_ahead=EnvRunAheadConfig(),
             rollout_failure=_failure_cfg(),
         )
         ctrl._master_config = SimpleNamespace(
@@ -1167,6 +1312,7 @@ def test_actor_path_releases_generation_permit_before_finalization() -> None:
         ctrl._async_cfg = SimpleNamespace(
             max_inflight_prompts=1,
             diagnostics=False,
+            env_run_ahead=EnvRunAheadConfig(),
             rollout_failure=_failure_cfg(),
         )
         ctrl._master_config = SimpleNamespace(
@@ -1283,6 +1429,7 @@ def test_actor_finalization_discards_recovery_ledger_ownership(
         ctrl._async_cfg = SimpleNamespace(
             max_inflight_prompts=1,
             diagnostics=False,
+            env_run_ahead=EnvRunAheadConfig(),
             rollout_failure=_failure_cfg(),
         )
         ctrl._master_config = SimpleNamespace(

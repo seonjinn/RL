@@ -475,6 +475,40 @@ class WatchdogConfig(BaseModel, extra="allow"):
         return self
 
 
+class EnvRunAheadConfig(BaseModel, extra="allow"):
+    """Start environment setup for a batch while it waits for admission.
+
+    The staleness gate holds a batch until the trainer catches up. Without run-ahead,
+    every rollout of the batch then pays its whole environment startup (sandbox spinup,
+    runtime connect, repo setup) after admission, on the step's critical path. With it,
+    the pump asks NeMo-Gym to prewarm the first ``max_prompts`` prompts of the batch
+    before it waits: the agent builds its environment and holds before the first model
+    call. The real dispatch after admission adopts the warm environment, so only model
+    and tool time remain on the critical path.
+
+    No model call runs before admission, so the weight version a rollout starts on, and
+    therefore its staleness, is the same as without run-ahead. An agent that does not
+    support prewarm runs cold, as before.
+    """
+
+    enabled: bool = False
+    # Prompts per batch to prewarm. Each prewarmed prompt holds one environment per
+    # generation while it waits, so this caps the extra memory run-ahead costs.
+    max_prompts: NonNegativeInt = 0
+    # Bound on the prewarm requests for one batch. The requests only start setup and
+    # return, so this is a guard against a hung agent, not a setup budget.
+    prewarm_timeout_s: PositiveFloat = 60.0
+
+    @model_validator(mode="after")
+    def _check_consistent(self) -> "EnvRunAheadConfig":
+        if self.enabled and self.max_prompts == 0:
+            raise ValueError(
+                "async_rl.env_run_ahead.enabled=true needs max_prompts >= 1; with 0 "
+                "nothing is prewarmed and the setting is a silent no-op."
+            )
+        return self
+
+
 class AsyncRLConfig(BaseModel, extra="allow"):
     # Stream every consumed sample's untruncated token tensors to JSONL. Files
     # are published only after the optimizer step completes; disabled by default.
@@ -505,6 +539,8 @@ class AsyncRLConfig(BaseModel, extra="allow"):
     max_inflight_prompts: int = 32
     # Cap on unconsumed rollout groups buffered in the DataPlane (backpressure).
     max_buffered_rollouts: int = 64
+    # Environment setup for a batch while the staleness gate holds it (NeMo-Gym only).
+    env_run_ahead: EnvRunAheadConfig = Field(default_factory=EnvRunAheadConfig)
     # Enable per-rollout diagnostic prints (prompt content / completion previews).
     diagnostics: bool = False
     # CPU actors that run the advantage stage. 0 keeps it in the controller
@@ -1347,6 +1383,30 @@ def _validate_algo_settings(master_config: MasterConfig) -> None:
         )
 
 
+def _validate_env_run_ahead(
+    master_config: MasterConfig, num_prompts_per_step: int
+) -> None:
+    run_ahead = master_config.async_rl.env_run_ahead
+    if not run_ahead.enabled:
+        return
+    if not master_config.env.get("should_use_nemo_gym"):
+        raise ValueError(
+            "async_rl.env_run_ahead requires the NeMo-Gym rollout path "
+            "(env.should_use_nemo_gym=true): only NeMo-Gym agents can prewarm."
+        )
+    if master_config.token_capture.enabled:
+        raise ValueError(
+            "async_rl.env_run_ahead does not support token_capture.enabled=true: "
+            "capture registers rollout ids at dispatch, after the prewarm already ran."
+        )
+    if run_ahead.max_prompts > num_prompts_per_step:
+        raise ValueError(
+            f"async_rl.env_run_ahead.max_prompts ({run_ahead.max_prompts}) exceeds "
+            f"num_prompts_per_step ({num_prompts_per_step}); a batch has no more "
+            "prompts than that to prewarm."
+        )
+
+
 def validate_single_controller_config(master_config: MasterConfig) -> None:
     """Validate cross-section SingleController constraints before setup."""
     if master_config.loss_fn.seq_logprob_error_in_loss:
@@ -1458,6 +1518,7 @@ def validate_single_controller_config(master_config: MasterConfig) -> None:
             "token_capture.defer_routed_experts_to_policy is only wired for the Megatron "
             "policy; the Automodel worker does not assemble deferred routes."
         )
+    _validate_env_run_ahead(master_config, algo_cfg.num_prompts_per_step)
     if (
         token_capture_config.enabled
         and token_capture_config.num_reassembler_workers
