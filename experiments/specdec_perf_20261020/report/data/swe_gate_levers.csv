@@ -1,0 +1,41 @@
+arm,lever,pool_groups,prewarmed_groups,startup_hidden_s,model_exposed_s,model_step_s,speedup_vs_baseline
+gbs32_control,baseline (staleness 1),8,0,0.0,114.5,167.9,1.00
+gbs32_control,"staleness 2, pool 2xPPS+PPS/8",9,0,0.0,89.2,142.7,1.18
+gbs32_control,"staleness 2, pool 2xPPS+PPS/4",9,0,0.0,89.2,142.7,1.18
+gbs32_control,"staleness 2, pool 2xPPS+PPS/2",10,0,0.0,72.9,126.4,1.33
+gbs32_control,"staleness 2, pool 3xPPS",12,0,0.0,50.3,103.8,1.62
+gbs32_control,"prewarm all, hide 75% startup",8,4,31.5,95.3,148.8,1.13
+gbs32_control,"prewarm all, hide 100% startup",8,4,42.0,88.7,142.2,1.18
+gbs32_control,prewarm 1/2 batch,8,2,42.0,101.0,154.4,1.09
+gbs32_control,prewarm 1/4 batch,8,1,42.0,107.6,161.0,1.04
+gbs32_control,staleness 2 + prewarm all,12,4,42.0,34.3,87.7,1.91
+gbs32_dspark_k8,baseline (staleness 1),8,0,0.0,80.0,134.2,1.00
+gbs32_dspark_k8,"staleness 2, pool 2xPPS+PPS/8",9,0,0.0,59.4,113.6,1.18
+gbs32_dspark_k8,"staleness 2, pool 2xPPS+PPS/4",9,0,0.0,59.4,113.6,1.18
+gbs32_dspark_k8,"staleness 2, pool 2xPPS+PPS/2",10,0,0.0,46.5,100.7,1.33
+gbs32_dspark_k8,"staleness 2, pool 3xPPS",12,0,0.0,28.8,83.0,1.62
+gbs32_dspark_k8,"prewarm all, hide 75% startup",8,4,31.5,60.4,114.6,1.17
+gbs32_dspark_k8,"prewarm all, hide 100% startup",8,4,42.0,53.7,107.9,1.24
+gbs32_dspark_k8,prewarm 1/2 batch,8,2,42.0,66.0,120.2,1.12
+gbs32_dspark_k8,prewarm 1/4 batch,8,1,42.0,72.5,126.7,1.06
+gbs32_dspark_k8,staleness 2 + prewarm all,12,4,42.0,13.6,67.8,1.98
+gbs256_control,baseline (staleness 1),64,0,0.0,150.6,447.3,1.00
+gbs256_control,"staleness 2, pool 2xPPS+PPS/8",68,0,0.0,61.2,357.9,1.25
+gbs256_control,"staleness 2, pool 2xPPS+PPS/4",72,0,0.0,26.2,322.8,1.39
+gbs256_control,"staleness 2, pool 2xPPS+PPS/2",80,0,0.0,2.7,299.4,1.49
+gbs256_control,"staleness 2, pool 3xPPS",96,0,0.0,0.0,296.7,1.51
+gbs256_control,"prewarm all, hide 75% startup",64,32,57.8,105.9,402.5,1.11
+gbs256_control,"prewarm all, hide 100% startup",64,32,77.0,90.4,387.1,1.16
+gbs256_control,prewarm 1/2 batch,64,16,77.0,110.1,406.8,1.10
+gbs256_control,prewarm 1/4 batch,64,8,77.0,126.0,422.6,1.06
+gbs256_control,staleness 2 + prewarm all,96,32,77.0,0.0,296.7,1.51
+gbs256_dspark_k8,baseline (staleness 1),64,0,0.0,92.2,385.5,1.00
+gbs256_dspark_k8,"staleness 2, pool 2xPPS+PPS/8",68,0,0.0,20.2,313.5,1.23
+gbs256_dspark_k8,"staleness 2, pool 2xPPS+PPS/4",72,0,0.0,1.0,294.3,1.31
+gbs256_dspark_k8,"staleness 2, pool 2xPPS+PPS/2",80,0,0.0,0.0,293.3,1.31
+gbs256_dspark_k8,"staleness 2, pool 3xPPS",96,0,0.0,0.0,293.3,1.31
+gbs256_dspark_k8,"prewarm all, hide 75% startup",64,32,43.9,57.0,350.3,1.10
+gbs256_dspark_k8,"prewarm all, hide 100% startup",64,32,58.5,45.1,338.3,1.14
+gbs256_dspark_k8,prewarm 1/2 batch,64,16,58.5,59.0,352.2,1.09
+gbs256_dspark_k8,prewarm 1/4 batch,64,8,58.5,70.4,363.7,1.06
+gbs256_dspark_k8,staleness 2 + prewarm all,96,32,58.5,0.0,293.3,1.31

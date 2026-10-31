@@ -1,0 +1,5 @@
+arm,prompts_per_step,train_side_s,exposed_generation_s,step_s,startup_s
+gbs32_control,4,53.46,122.27,175.72,42.0
+gbs32_dspark_k8,4,54.19,86.98,141.17,42.0
+gbs256_control,32,296.66,161.25,457.90,77.0
+gbs256_dspark_k8,32,293.26,99.69,392.95,58.5
