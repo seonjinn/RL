@@ -1,8 +1,11 @@
-# Train on balanced_language.jsonl without the four instances that hit the 1200 s eval cap.
+# Train on balanced_language.jsonl without five instances.
 # brandonbloom__fipp-78, athensresearch__athens-1521, cqfn__diktat-778 and cqfn__diktat-760
 # resolved 0 of 658 sd1023 attempts, so they gave no reward signal and set the step time.
-# The loader does not shuffle, so lines 81-84 take their place. Rebuild the file with:
-#   python filter_swe_instances.py <balanced_language.jsonl> <this data_path> <the four ids>
+# getmoto__moto-6317 cannot start: the sandbox fails "cd /moto", Gym returns an empty
+# result, and the run fails at line 1100 (GBS 512 job 8499194, step 16).
+# The loader does not shuffle, so the next lines take their place and lines 1-1099 keep
+# the drop4 order. Rebuild the file from balanced_language_drop4capped.jsonl with:
+#   python filter_swe_instances.py <balanced_language_drop4capped.jsonl> <this data_path> getmoto__moto-6317
 data:
   train:
-    data_path: /lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/datasets/swe/balanced_language_drop4capped.jsonl
+    data_path: /lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/datasets/swe/balanced_language_drop5.jsonl

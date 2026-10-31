@@ -34,6 +34,12 @@ async_rl:
   # slowest one, so the 600 s default flags healthy steps as stalls.
   stall_watchdog:
     stall_timeout_s: 7200
+  # Gym returns an empty result when an instance's sandbox cannot start, and both data
+  # attempts fail the same way. Skip up to 4 such prompts per run instead of failing it.
+  # The default on_dropped_prompt=shrink keeps the data order, so arms stay comparable.
+  # min_step_batch_fraction 0.9 still fails the step below 10 prompts per step.
+  rollout_failure:
+    max_skipped_prompts: 4
 env:
   nemo_gym:
     # uvicorn worker processes for the policy model proxy (default 1). Every agent turn of
