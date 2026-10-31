@@ -2562,13 +2562,8 @@ class SingleControllerActor:
                         if self._divert_batch_to_reserve(prompt_batch):
                             continue
                         admission_id = str(uuid.uuid4())
-                        prompts = self._mark_for_prewarm(
-                            [
-                                {k: v[prompt_idx] for k, v in prompt_batch.items()}  # type: ignore
-                                for prompt_idx in range(prompt_batch.size)
-                            ]
-                        )
-                        for prompt in prompts:
+                        for prompt_idx in range(prompt_batch.size):
+                            prompt = {k: v[prompt_idx] for k, v in prompt_batch.items()}  # type: ignore
                             group_id = self._rollout_manager.reserve_prompt_group(
                                 cut,
                                 prompt,
@@ -2578,15 +2573,21 @@ class SingleControllerActor:
                             )
                             prompt_dispatches.append((prompt, group_id))
 
-                    # Outside the mutation: a checkpoint must not wait on agent I/O.
-                    await self._prewarm_held_prompts(
+                    # The ledger keeps the unstamped dataloader sample: a prewarm id is
+                    # spent by its one dispatch, so a recovery replay runs cold. The
+                    # prewarm runs outside the mutation so a checkpoint does not wait
+                    # on agent I/O.
+                    prompts = self._mark_for_prewarm(
                         [prompt for prompt, _ in prompt_dispatches]
                     )
+                    await self._prewarm_held_prompts(prompts)
                     target_step = await self._admit_reserved_prompt_groups(
                         [group_id for _, group_id in prompt_dispatches]
                     )
 
-                    for prompt, group_id in prompt_dispatches:
+                    for prompt, (_, group_id) in zip(
+                        prompts, prompt_dispatches, strict=True
+                    ):
                         await _launch(prompt, target_step, group_id)
 
         # Only now that every dispatched rollout has settled is the pool genuinely

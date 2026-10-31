@@ -1440,6 +1440,19 @@ def test_nemo_gym_build_inputs_keys_each_generation_by_prewarm_id():
     assert input_sample["extra_env_info"][NEMO_GYM_PREWARM_ID_KEY] == "pw"
 
 
+def test_nemo_gym_prewarm_row_contract_matches_the_gym_agent():
+    """NeMo-Gym reads the key by this literal alias; a rename on one side runs cold."""
+    assert NEMO_GYM_PREWARM_ID_KEY == "_ng_prewarm_id"
+    assert NEMO_GYM_PREWARM_KEY == "_ng_prewarm_key"
+    impl = _nemo_gym_impl(True)
+    impl._num_generations_per_prompt = 2
+
+    rows = impl._build_inputs(_prewarm_sample("abc"))
+
+    assert [row["_ng_prewarm_key"] for row in rows] == ["abc/0", "abc/1"]
+    assert all("_ng_prewarm_id" not in row for row in rows)
+
+
 def test_nemo_gym_build_inputs_keeps_the_prewarm_key_on_a_row_redispatch():
     """A retried row must still find the environment its generation prewarmed."""
     impl = _nemo_gym_impl(True)
@@ -1503,6 +1516,16 @@ class TestRolloutManagerPrewarm:
         metrics = manager._stats.as_metrics()
         assert metrics["rollout/prewarm_requested_total"] == 4.0
         assert metrics["rollout/prewarm_accepted_total"] == 3.0
+
+    def test_it_logs_how_many_generations_the_agents_refused(self, capsys):
+        """An agent at capacity refuses without an error, so only the log shows it."""
+        manager = self._manager(AsyncMock(side_effect=[2, 0]))
+
+        _run(manager.prewarm([{"idx": 0}, {"idx": 1}], timeout_s=5.0))
+
+        assert "agents accepted 2 of 4 prewarm generations (2 prompts)" in (
+            capsys.readouterr().out
+        )
 
     def test_a_failed_prompt_runs_cold_and_the_rest_still_count(self):
         manager = self._manager(AsyncMock(side_effect=[RuntimeError("agent down"), 2]))

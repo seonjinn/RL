@@ -498,6 +498,12 @@ class EnvRunAheadConfig(BaseModel, extra="allow"):
     # Bound on the prewarm requests for one batch. The requests only start setup and
     # return, so this is a guard against a hung agent, not a setup budget.
     prewarm_timeout_s: PositiveFloat = 60.0
+    # Mirror of the NeMo-Gym agent's prewarm_max_entries: how many warm environments
+    # one agent holds before it rejects new prewarms. NeMo-RL cannot read the agent
+    # config, so set this to the agent's value to size-check max_prompts against it.
+    # The check takes one batch on one agent, so it is conservative when NeMo-Gym
+    # replicas split the batch.
+    agent_prewarm_max_entries: PositiveInt = 64
 
     @model_validator(mode="after")
     def _check_consistent(self) -> "EnvRunAheadConfig":
@@ -1384,7 +1390,9 @@ def _validate_algo_settings(master_config: MasterConfig) -> None:
 
 
 def _validate_env_run_ahead(
-    master_config: MasterConfig, num_prompts_per_step: int
+    master_config: MasterConfig,
+    num_prompts_per_step: int,
+    num_generations_per_prompt: int,
 ) -> None:
     run_ahead = master_config.async_rl.env_run_ahead
     if not run_ahead.enabled:
@@ -1404,6 +1412,18 @@ def _validate_env_run_ahead(
             f"async_rl.env_run_ahead.max_prompts ({run_ahead.max_prompts}) exceeds "
             f"num_prompts_per_step ({num_prompts_per_step}); a batch has no more "
             "prompts than that to prewarm."
+        )
+    prewarm_rows = run_ahead.max_prompts * num_generations_per_prompt
+    if prewarm_rows > run_ahead.agent_prewarm_max_entries:
+        warnings.warn(
+            f"async_rl.env_run_ahead.max_prompts ({run_ahead.max_prompts}) x "
+            f"num_generations_per_prompt ({num_generations_per_prompt}) = "
+            f"{prewarm_rows} prewarms per batch exceeds agent_prewarm_max_entries "
+            f"({run_ahead.agent_prewarm_max_entries}). A NeMo-Gym agent rejects "
+            "prewarms past its prewarm_max_entries, and those rollouts run cold. "
+            "Lower max_prompts, or raise prewarm_max_entries in the NeMo-Gym agent "
+            "config and set agent_prewarm_max_entries to match.",
+            stacklevel=2,
         )
 
 
@@ -1518,7 +1538,11 @@ def validate_single_controller_config(master_config: MasterConfig) -> None:
             "token_capture.defer_routed_experts_to_policy is only wired for the Megatron "
             "policy; the Automodel worker does not assemble deferred routes."
         )
-    _validate_env_run_ahead(master_config, algo_cfg.num_prompts_per_step)
+    _validate_env_run_ahead(
+        master_config,
+        algo_cfg.num_prompts_per_step,
+        algo_cfg.num_generations_per_prompt,
+    )
     if (
         token_capture_config.enabled
         and token_capture_config.num_reassembler_workers

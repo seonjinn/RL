@@ -807,6 +807,7 @@ class TestEnvRunAheadValidation:
         assert cfg.enabled is False
         assert cfg.max_prompts == 0
         assert cfg.prewarm_timeout_s == 60.0
+        assert cfg.agent_prewarm_max_entries == 64
 
     def test_the_default_passes_on_a_native_run(self):
         cfg = _master_config()
@@ -818,7 +819,12 @@ class TestEnvRunAheadValidation:
             EnvRunAheadConfig(enabled=True)
 
     @pytest.mark.parametrize(
-        "field, value", [("max_prompts", -1), ("prewarm_timeout_s", 0.0)]
+        "field, value",
+        [
+            ("max_prompts", -1),
+            ("prewarm_timeout_s", 0.0),
+            ("agent_prewarm_max_entries", 0),
+        ],
     )
     def test_out_of_range_values_are_rejected(self, field, value):
         with pytest.raises(ValidationError, match=field):
@@ -844,3 +850,34 @@ class TestEnvRunAheadValidation:
         cfg = self._enabled(max_prompts=9, num_prompts_per_step=8)
         with pytest.raises(ValueError, match="exceeds num_prompts_per_step"):
             validate_single_controller_config(cfg)
+
+    @staticmethod
+    def _sizing_warnings(cfg: MasterConfig) -> list[str]:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            validate_single_controller_config(cfg)
+        return [
+            str(w.message) for w in caught if "prewarm_max_entries" in str(w.message)
+        ]
+
+    def test_prewarms_that_fill_the_agent_do_not_warn(self):
+        """16 prompts x 4 generations fill the default capacity of 64 exactly."""
+        cfg = self._enabled(max_prompts=16, num_prompts_per_step=32)
+        assert self._sizing_warnings(cfg) == []
+
+    def test_prewarms_past_the_agent_capacity_warn(self):
+        """The agent refuses the overflow without an error, so say so up front."""
+        cfg = self._enabled(max_prompts=17, num_prompts_per_step=32)
+        (message,) = self._sizing_warnings(cfg)
+        assert "68 prewarms per batch" in message
+
+    def test_a_matching_agent_capacity_silences_the_warning(self):
+        cfg = _master_config(
+            env_run_ahead={
+                "enabled": True,
+                "max_prompts": 17,
+                "agent_prewarm_max_entries": 68,
+            },
+            num_prompts_per_step=32,
+        )
+        assert self._sizing_warnings(cfg) == []

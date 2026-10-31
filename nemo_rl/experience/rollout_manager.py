@@ -1977,7 +1977,8 @@ class RolloutManager:
         if not isinstance(self._impl, AsyncNemoGymRolloutImpl):
             raise TypeError("env run-ahead prewarm needs the NeMo-Gym rollout path")
         num_prompts = len(input_samples)
-        self._stats.prewarm_requested += num_prompts * self._num_generations_per_prompt
+        requested = num_prompts * self._num_generations_per_prompt
+        self._stats.prewarm_requested += requested
         try:
             async with asyncio.timeout(timeout_s):
                 results = await asyncio.gather(
@@ -2002,6 +2003,13 @@ class RolloutManager:
             result for result in results if not isinstance(result, BaseException)
         )
         self._stats.prewarm_accepted += accepted
+        # An agent refuses prewarms past its capacity without an error, so this line
+        # is where those refusals show up.
+        print(
+            f"[env_run_ahead] agents accepted {accepted} of {requested} prewarm "
+            f"generations ({num_prompts} prompts); the rest run cold",
+            flush=True,
+        )
         return accepted
 
     async def generate_and_push(

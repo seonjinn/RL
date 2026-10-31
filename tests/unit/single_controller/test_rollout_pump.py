@@ -1360,119 +1360,140 @@ def test_actor_path_releases_generation_permit_before_finalization() -> None:
     asyncio.run(_main())
 
 
+class _RecoveryCaptureManager:
+    """A recovery-enabled manager that keeps real ledger ownership and no rollouts."""
+
+    def __init__(self) -> None:
+        self.recovery_ledger = RolloutRecoveryLedger()
+        self.stats = SimpleNamespace(committed=0)
+
+    def reserve_prompt_group(
+        self,
+        cut: DataPlaneMutationCut,
+        prompt: Any,
+        *,
+        target_step: int | None,
+        admitted: bool,
+        admission_id: str,
+    ) -> str:
+        return self.recovery_ledger.reserve_group(
+            cut,
+            prompt_id=str(prompt["idx"]),
+            prompt_payload=prompt,
+            expected_generations=1,
+            target_step=target_step,
+            start_weight_version=0,
+            admitted=admitted,
+            admission_id=admission_id,
+        ).group_id
+
+    def mark_prompt_group_admitted(
+        self,
+        cut: DataPlaneMutationCut,
+        group_id: str,
+        *,
+        target_step: int | None,
+    ) -> None:
+        self.recovery_ledger.mark_group_admitted(
+            cut,
+            group_id,
+            target_step=target_step,
+            start_weight_version=0,
+        )
+
+    def discard_prompt_group(
+        self,
+        cut: DataPlaneMutationCut,
+        group_id: str,
+    ) -> None:
+        self.recovery_ledger.discard_group(cut, group_id)
+
+    async def generate_for_finalization(
+        self,
+        prompt: Any,
+        *,
+        target_step: int | None,
+        inflight_registry: dict[str, tuple[asyncio.Task[None], int]],
+        lineage_group_id: str,
+    ) -> Any:
+        del prompt, target_step, inflight_registry
+        assert self.recovery_ledger.get_group(lineage_group_id)
+        return SimpleNamespace(group_id=lineage_group_id)
+
+
+def _recovery_pump(
+    manager: _RecoveryCaptureManager,
+    prompt_batch: BatchedDataDict,
+    *,
+    env_run_ahead: EnvRunAheadConfig,
+    committed: bool,
+) -> Any:
+    """A recovery-enabled pump over one batch; the finalizer discards each group.
+
+    Build it inside the running loop: the checkpoint barrier holds a Condition.
+    """
+    controller_cls = SingleControllerActor.__ray_metadata__.modified_class
+    ctrl = object.__new__(controller_cls)
+    ctrl._async_cfg = SimpleNamespace(
+        max_inflight_prompts=1,
+        diagnostics=False,
+        env_run_ahead=env_run_ahead,
+        rollout_failure=_failure_cfg(),
+    )
+    ctrl._master_config = SimpleNamespace(
+        grpo=GRPOConfig.model_construct(max_num_epochs=1),
+        token_capture=SimpleNamespace(min_valid_fraction_per_group=None),
+    )
+    ctrl._algo_cfg = ctrl._master_config.grpo
+    ctrl._buffer = _RecordingBuffer()
+    ctrl._rollout_manager = manager
+    ctrl._sampler = WindowedSampler(None, max_staleness_versions=1)
+    ctrl._dataloader = [prompt_batch]
+    ctrl._rollout_permitted = asyncio.Event()
+    ctrl._rollout_permitted.set()
+    ctrl._rollout_exhausted = asyncio.Event()
+    ctrl._buffer_capacity = asyncio.Semaphore(1)
+    ctrl._inflight_rollouts = 0
+    ctrl._inflight_by_group_id = {}
+    ctrl._dispatched_rollouts = set()
+    ctrl._trainer_version = 0
+    ctrl._current_epoch = 0
+    ctrl._sampler_stamps_target_steps = False
+    ctrl._data_plane_checkpoint_barrier = DataPlaneCheckpointBarrier()
+    _init_pump_ledgers(ctrl)
+    ctrl._finalizer_actors = [object()]
+    ctrl._rollout_recovery_enabled = True
+
+    async def _finalize(
+        request: Any,
+    ) -> Any:
+        async with ctrl._data_plane_checkpoint_barrier.mutation() as cut:
+            manager.recovery_ledger.discard_group(cut, request.group_id)
+        if not committed:
+            return None
+        return SimpleNamespace(valid_row_count=1, total_row_count=1)
+
+    ctrl._finalize_with_actor = _finalize
+    return ctrl
+
+
 @pytest.mark.parametrize("committed", [False, True])
 def test_actor_finalization_discards_recovery_ledger_ownership(
     committed: bool,
 ) -> None:
-    class _RecoveryCaptureManager:
-        def __init__(self) -> None:
-            self.recovery_ledger = RolloutRecoveryLedger()
-            self.stats = SimpleNamespace(committed=0)
-
-        def reserve_prompt_group(
-            self,
-            cut: DataPlaneMutationCut,
-            prompt: Any,
-            *,
-            target_step: int | None,
-            admitted: bool,
-            admission_id: str,
-        ) -> str:
-            return self.recovery_ledger.reserve_group(
-                cut,
-                prompt_id=str(prompt["idx"]),
-                prompt_payload=prompt,
-                expected_generations=1,
-                target_step=target_step,
-                start_weight_version=0,
-                admitted=admitted,
-                admission_id=admission_id,
-            ).group_id
-
-        def mark_prompt_group_admitted(
-            self,
-            cut: DataPlaneMutationCut,
-            group_id: str,
-            *,
-            target_step: int | None,
-        ) -> None:
-            self.recovery_ledger.mark_group_admitted(
-                cut,
-                group_id,
-                target_step=target_step,
-                start_weight_version=0,
-            )
-
-        def discard_prompt_group(
-            self,
-            cut: DataPlaneMutationCut,
-            group_id: str,
-        ) -> None:
-            self.recovery_ledger.discard_group(cut, group_id)
-
-        async def generate_for_finalization(
-            self,
-            prompt: Any,
-            *,
-            target_step: int | None,
-            inflight_registry: dict[str, tuple[asyncio.Task[None], int]],
-            lineage_group_id: str,
-        ) -> Any:
-            del prompt, target_step, inflight_registry
-            assert self.recovery_ledger.get_group(lineage_group_id)
-            return SimpleNamespace(group_id=lineage_group_id)
-
     async def _main() -> None:
         manager = _RecoveryCaptureManager()
-        controller_cls = SingleControllerActor.__ray_metadata__.modified_class
-        ctrl = object.__new__(controller_cls)
-        ctrl._async_cfg = SimpleNamespace(
-            max_inflight_prompts=1,
-            diagnostics=False,
-            env_run_ahead=EnvRunAheadConfig(),
-            rollout_failure=_failure_cfg(),
-        )
-        ctrl._master_config = SimpleNamespace(
-            grpo=GRPOConfig.model_construct(max_num_epochs=1),
-            token_capture=SimpleNamespace(min_valid_fraction_per_group=None),
-        )
-        ctrl._algo_cfg = ctrl._master_config.grpo
-        ctrl._buffer = _RecordingBuffer()
-        ctrl._rollout_manager = manager
-        ctrl._sampler = WindowedSampler(None, max_staleness_versions=1)
-        ctrl._dataloader = [
+        ctrl = _recovery_pump(
+            manager,
             BatchedDataDict(
                 {
                     "idx": [7],
                     "message_log": [[{"role": "user", "content": "prompt"}]],
                 }
-            )
-        ]
-        ctrl._rollout_permitted = asyncio.Event()
-        ctrl._rollout_permitted.set()
-        ctrl._rollout_exhausted = asyncio.Event()
-        ctrl._buffer_capacity = asyncio.Semaphore(1)
-        ctrl._inflight_rollouts = 0
-        ctrl._inflight_by_group_id = {}
-        ctrl._dispatched_rollouts = set()
-        ctrl._trainer_version = 0
-        ctrl._current_epoch = 0
-        ctrl._sampler_stamps_target_steps = False
-        ctrl._data_plane_checkpoint_barrier = DataPlaneCheckpointBarrier()
-        _init_pump_ledgers(ctrl)
-        ctrl._finalizer_actors = [object()]
-        ctrl._rollout_recovery_enabled = True
-
-        async def _finalize(
-            request: Any,
-        ) -> Any:
-            async with ctrl._data_plane_checkpoint_barrier.mutation() as cut:
-                manager.recovery_ledger.discard_group(cut, request.group_id)
-            if not committed:
-                return None
-            return SimpleNamespace(valid_row_count=1, total_row_count=1)
-
-        ctrl._finalize_with_actor = _finalize
+            ),
+            env_run_ahead=EnvRunAheadConfig(),
+            committed=committed,
+        )
 
         await ctrl._rollout_pump()
 
@@ -1484,6 +1505,86 @@ def test_actor_finalization_discards_recovery_ledger_ownership(
         assert ctrl._rollout_exhausted.is_set()
 
     asyncio.run(_main())
+
+
+class _RunAheadRecoveryManager(_RecoveryCaptureManager):
+    """Records the ledger and barrier state the prewarm sees, and each launch's id."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.barrier: DataPlaneCheckpointBarrier | None = None
+        self.events: list[str] = []
+        self.prewarmed_ids: list[str] = []
+        self.launched_ids: list[str | None] = []
+
+    def reserve_prompt_group(
+        self, cut: DataPlaneMutationCut, prompt: Any, **kwargs: Any
+    ) -> str:
+        self.events.append("reserve")
+        return super().reserve_prompt_group(cut, prompt, **kwargs)
+
+    def mark_prompt_group_admitted(
+        self, cut: DataPlaneMutationCut, group_id: str, **kwargs: Any
+    ) -> None:
+        self.events.append("admit")
+        super().mark_prompt_group_admitted(cut, group_id, **kwargs)
+
+    async def prewarm(self, prompts: list[Any], *, timeout_s: float) -> int:
+        self.events.append("prewarm")
+        # The reservation mutation has closed, so a checkpoint can cut right now.
+        assert self.barrier is not None
+        async with asyncio.timeout(1.0):
+            async with self.barrier.checkpoint():
+                pass
+        assert all(
+            NEMO_GYM_PREWARM_ID_KEY not in group.prompt_payload["extra_env_info"]
+            for group in self.recovery_ledger.groups()
+        )
+        self.prewarmed_ids.extend(
+            prompt["extra_env_info"][NEMO_GYM_PREWARM_ID_KEY] for prompt in prompts
+        )
+        return len(prompts)
+
+    async def generate_for_finalization(self, prompt: Any, **kwargs: Any) -> Any:
+        self.launched_ids.append(prompt["extra_env_info"].get(NEMO_GYM_PREWARM_ID_KEY))
+        return await super().generate_for_finalization(prompt, **kwargs)
+
+
+def test_recovery_ledger_keeps_the_unstamped_prompt_under_env_run_ahead() -> None:
+    """A prewarm id is spent by its one dispatch, so a recovery replay must run cold."""
+    prompt_batch = BatchedDataDict(
+        {
+            "idx": [7, 8, 9],
+            "message_log": [
+                [{"role": "user", "content": f"prompt {i}"}] for i in range(3)
+            ],
+            "extra_env_info": [{"task": i} for i in range(3)],
+        }
+    )
+
+    async def _main() -> None:
+        manager = _RunAheadRecoveryManager()
+        ctrl = _recovery_pump(
+            manager,
+            prompt_batch,
+            env_run_ahead=EnvRunAheadConfig(enabled=True, max_prompts=2),
+            committed=False,
+        )
+        manager.barrier = ctrl._data_plane_checkpoint_barrier
+
+        await ctrl._rollout_pump()
+
+        assert manager.events == ["reserve"] * 3 + ["prewarm"] + ["admit"] * 3
+        stamped = [prewarm_id for prewarm_id in manager.launched_ids if prewarm_id]
+        assert len(stamped) == 2
+        assert sorted(stamped) == sorted(manager.prewarmed_ids)
+        assert manager.launched_ids.count(None) == 1
+        assert manager.recovery_ledger.groups() == []
+
+    asyncio.run(_main())
+    assert all(
+        NEMO_GYM_PREWARM_ID_KEY not in info for info in prompt_batch["extra_env_info"]
+    )
 
 
 @pytest.mark.vllm
