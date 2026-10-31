@@ -42,6 +42,15 @@ async_rl:
   # process, which both holds a whole cohort's advantage inputs in the
   # controller's heap and blocks its event loop while the stage runs.
   num_advantage_workers: 0
+  # NeMo-Gym only. Start the agent sandboxes of the first max_prompts prompts of a
+  # batch before the sampler admits it, so the startup cost overlaps the wait.
+  env_run_ahead:
+    enabled: false
+    max_prompts: 0
+    prewarm_timeout_s: 60.0
+    # Must match prewarm_max_entries in the NeMo-Gym agent config. Setup warns when
+    # max_prompts x num_generations_per_prompt exceeds it.
+    agent_prewarm_max_entries: 64
 
   # ── Resiliency ─────────────────────────────────────────────────────────────
   # What happens to a prompt whose rollout fails. Infrastructure failures are
