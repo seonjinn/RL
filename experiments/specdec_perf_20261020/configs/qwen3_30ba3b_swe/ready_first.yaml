@@ -5,5 +5,10 @@ async_rl:
   sampler:
     name: ready_first
     max_staleness_versions: 1
+  # ready_first stamps no target step, so the step never gets credit for a skipped
+  # prompt and waits on it. The config validator rejects a skip budget for this sampler.
+  # Fail on the first dropped prompt. The drop5 data removes the known sandbox failure.
+  rollout_failure:
+    max_skipped_prompts: 0
 loss_fn:
   force_on_policy_ratio: false
