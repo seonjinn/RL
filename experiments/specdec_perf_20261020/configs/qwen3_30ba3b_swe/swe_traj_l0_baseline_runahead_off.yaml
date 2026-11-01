@@ -1,0 +1,5 @@
+# Control arm of the env run-ahead A/B: the L0 baseline on the nv-OpenHands commit with the
+# prewarm hold. Env run-ahead stays off, so only the agent commit differs from swe_traj_l0_baseline.yaml.
+defaults:
+  - swe_traj_l0_baseline.yaml
+  - traj_opt_oh_runahead.yaml

@@ -1,0 +1,6 @@
+# Env run-ahead for GBS 32 (4 prompts per step): prewarm the first 2 prompts of each batch,
+# 16 environments, before the staleness gate admits it. Compose it after single_controller.yaml.
+async_rl:
+  env_run_ahead:
+    enabled: true
+    max_prompts: 2
