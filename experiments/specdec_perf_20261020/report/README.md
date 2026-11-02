@@ -523,18 +523,20 @@ Each pair runs at one batch size. The intervals resample the 20 paired steps ([d
 
 At GBS 32 the 16 vLLM engines hold about 0.7 open calls each, but exposed generation is 70% of the step. Thus decode speed does not set the step. The ready-first sampler (`ReadyFirstSampler`) sets it. It admits one batch of PPS prompts per trainer version. With `max_staleness_versions: 1`, at most 2 x PPS groups are in flight. It never drops or aborts a rollout. At a step start, 1-3 groups of the previous batch still run. Thus the step also waits for the fastest groups of the batch that starts with this step. One group span (startup, model calls and final eval) is 100-210 s.
 
-[swe_gate_model.py](../swe_gate_model.py) models this gate. At each step start, the model fills the pool to the cap with spans that it draws from the measured group spans. The step takes the first PPS groups that finish, then adds the measured train-side time. The inputs are the spans and the train-side times of four staleness 1 arms ([arms](data/swe_gate_arms.csv), [spans](data/swe_gate_spans.csv)). The output is [swe_gate_levers.csv](data/swe_gate_levers.csv).
+[swe_gate_model.py](../swe_gate_model.py) models this gate. At each step start, the model fills the pool to the cap with spans that it draws from the measured group spans. The step takes the first PPS groups that finish, then adds the measured train-side time. The inputs are the spans and the train-side times of six staleness 1 arms ([arms](data/swe_gate_arms.csv), [spans](data/swe_gate_spans.csv)). The output is [swe_gate_levers.csv](data/swe_gate_levers.csv).
 
-| Q30 V2, steps 2-20 | Pool (groups) | Exposed generation, measured / model (s) | Step, measured / model (s) |
+| Q30 V2, steps 2-20 (GBS 512: 2-16) | Pool (groups) | Exposed generation, measured / model (s) | Step, measured / model (s) |
 |---|---|---|---|
 | GBS 32 control | 8 | 122 / 114 | 176 / 168 |
 | GBS 32 DSpark K8 | 8 | 87 / 80 | 141 / 134 |
 | GBS 256 control | 64 | 161 / 151 | 458 / 447 |
 | GBS 256 DSpark K8 | 64 | 100 / 92 | 393 / 385 |
+| GBS 512 control | 128 | 215 / 200 | 378 / 363 |
+| GBS 512 DSpark K8 | 128 | 165 / 152 | 330 / 316 |
 | GBS 32 control, staleness 2 | 12 | 50 / 50 | 105 / 104 |
 | GBS 32 DSpark K8, staleness 2 | 12 | 31 / 29 | 86 / 83 |
 
-**The model gives the step within 5% in all six arms.** It is 6-9% low on exposed generation in the four staleness 1 arms. The two staleness 2 rows are a test. The model takes no data from these runs. It uses the staleness 1 spans with a pool of 3 x PPS.
+**The model gives the step within 5% in all eight arms.** It is 6-9% low on exposed generation in the six staleness 1 arms. The two staleness 2 rows are a test. The model takes no data from these runs. It uses the staleness 1 spans with a pool of 3 x PPS.
 
 ### Staleness 2 gives 1.67x on the GBS 32 step
 
@@ -586,18 +588,20 @@ The GBS 512 samples per second divide the nominal 512 samples by the step, becau
 
 ### Env prewarm hides startup, but staleness 2 hides more
 
-The group span holds the env startup: 42 s per rollout at GBS 32 and 59-77 s at GBS 256. Env run-ahead starts the sandboxes of the next batch before the sampler admits it. The model scores this lever with a startup cut on the prewarmed groups of each refill.
+The group span holds the env startup: 42 s per rollout at GBS 32, 59-77 s at GBS 256 and 50-60 s at GBS 512. Env run-ahead starts the sandboxes of the next batch before the sampler admits it. The model scores this lever with a startup cut on the prewarmed groups of each refill.
 
-| Lever (model, step speedup) | GBS 32 control | GBS 32 DSpark K8 | GBS 256 control | GBS 256 DSpark K8 |
-|---|---|---|---|---|
-| Prewarm 1/4 of the batch | 1.04x | 1.06x | 1.06x | 1.06x |
-| Prewarm 1/2 of the batch | 1.09x | 1.12x | 1.10x | 1.09x |
-| Prewarm all, hide all startup | 1.18x | 1.24x | 1.16x | 1.14x |
-| Pool 2 x PPS + PPS/4 | 1.18x | 1.18x | 1.39x | 1.31x |
-| Staleness 2 (pool 3 x PPS) | 1.62x | 1.62x | 1.51x | 1.31x |
-| Staleness 2 and prewarm all | 1.91x | 1.98x | 1.51x | 1.31x |
+| Lever (model, step speedup) | GBS 32 control | GBS 32 DSpark K8 | GBS 256 control | GBS 256 DSpark K8 | GBS 512 control | GBS 512 DSpark K8 |
+|---|---|---|---|---|---|---|
+| Prewarm 1/4 of the batch | 1.04x | 1.06x | 1.06x | 1.06x | 1.04x | 1.07x |
+| Prewarm 1/2 of the batch | 1.09x | 1.12x | 1.10x | 1.09x | 1.07x | 1.12x |
+| Prewarm all, hide all startup | 1.18x | 1.24x | 1.16x | 1.14x | 1.13x | 1.19x |
+| Pool 2 x PPS + PPS/4 | 1.18x | 1.18x | 1.39x | 1.31x | 1.28x | 1.35x |
+| Staleness 2 (pool 3 x PPS) | 1.62x | 1.62x | 1.51x | 1.31x | 1.75x | 1.81x |
+| Staleness 2 and prewarm all | 1.91x | 1.98x | 1.51x | 1.31x | 1.94x | 1.92x |
 
-**Prewarm alone gives at most 1.14-1.24x, and half a batch gives 1.09-1.12x.** Staleness 2 gives more (1.31-1.62x) and changes only the config. At GBS 256, staleness 2 takes exposed generation to zero, so prewarm adds nothing and the step is train-bound. At GBS 32, prewarm adds 1.18-1.22x on top of staleness 2. A pool of 2 x PPS + PPS/4 gives 1.39x at GBS 256 with less lag than staleness 2. But the buffer check needs (staleness + 1) x PPS slots, so this pool needs a code change. The GBS 512 runs do not have group spans yet, so the model has no GBS 512 row.
+**Prewarm alone gives at most 1.13-1.24x, and half a batch gives 1.07-1.12x.** Staleness 2 gives more (1.31-1.81x) and changes only the config. At GBS 256, staleness 2 takes exposed generation to zero, so prewarm adds nothing and the step is train-bound. At GBS 32, prewarm adds 1.18-1.22x on top of staleness 2. A pool of 2 x PPS + PPS/4 gives 1.39x at GBS 256 with less lag than staleness 2. But the buffer check needs (staleness + 1) x PPS slots, so this pool needs a code change.
+
+**At GBS 512 the model gives staleness 2 the largest gain of the three batch sizes (1.75x control, 1.81x DSpark K8), but this value is an upper bound.** Exposed generation is 57% of the GBS 512 step, against 35% at GBS 256, so the gate has more time to hide. The model takes the control step from 363 s to 208 s and the DSpark K8 step from 316 s to 175 s. Prewarm of half a batch gives 1.07x and 1.12x. Staleness 2 with prewarm all gives 1.94x and 1.92x, and DSpark K8 is then train-bound (exposed generation 0 s). The model keeps the measured spans fixed, but more rollouts in flight make each span longer. A pool of 3 x PPS holds up to 1536 rollouts, and the Gym concurrency cap is 768. The staleness 1 runs held 331 (control) and 290 (DSpark K8) rollouts on average, with peaks of 610 and 555. More open rollouts per engine also slow the decode: 152 tok/s per rollout at GBS 256 and 108 at GBS 512. Thus a GBS 512 staleness 2 run must measure this lever, with the 768 cap raised to match the pool.
 
 #### Measured: prewarm of half a batch gives 1.14x at GBS 32
 
