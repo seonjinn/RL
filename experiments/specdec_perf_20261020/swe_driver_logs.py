@@ -216,7 +216,7 @@ def main() -> None:
 
 
 def runahead(steps: dict[str, list[dict]], metrics: dict[str, list[dict]]) -> None:
-    pooled = {"off": [], "p2": []}
+    pooled = {k: [] for k in ("off", "p2", "off_e", "p2_e", "off_r", "p2_r")}
     for label, off_run, p2_run in RUNAHEAD_PAIRS:
         if not any(k.endswith("-" + p2_run) for k in steps):
             continue
@@ -251,11 +251,19 @@ def runahead(steps: dict[str, list[dict]], metrics: dict[str, list[dict]]) -> No
         )
         pooled["off"] += list(ot)
         pooled["p2"] += list(pt)
+        pooled["off_e"] += list(oe)
+        pooled["p2_e"] += list(pe)
+        pooled["off_r"] += [r["reward"] for r in om]
+        pooled["p2_r"] += [r["reward"] for r in pm]
     if len(pooled["off"]) > 0:
-        ot, pt = np.array(pooled["off"]), np.array(pooled["p2"])
+        ot, pt, oe, pe, orw, prw = (np.array(v) for v in pooled.values())
         lo, hi = boot_ratio(ot, pt)
+        elo, ehi = boot_ratio(oe, pe)
+        rlo, rhi = boot_diff(orw, prw)
         print(
-            f"Run-ahead pooled n={len(ot)}: off {ot.mean():.1f} s, p2 {pt.mean():.1f} s, step {ot.mean() / pt.mean():.2f}x [{lo:.2f}, {hi:.2f}]"
+            f"Run-ahead pooled n={len(ot)}: off {ot.mean():.1f} s, p2 {pt.mean():.1f} s, step {ot.mean() / pt.mean():.2f}x [{lo:.2f}, {hi:.2f}], "
+            f"exposed {oe.mean():.1f} -> {pe.mean():.1f} s {oe.mean() / pe.mean():.2f}x [{elo:.2f}, {ehi:.2f}], "
+            f"reward p2 - off {100 * (prw.mean() - orw.mean()):+.1f}pp [{100 * rlo:+.1f}, {100 * rhi:+.1f}]"
         )
 
 
