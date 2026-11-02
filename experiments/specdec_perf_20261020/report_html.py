@@ -33,6 +33,8 @@ DRIVER_TIMES = (
     ("weight_sync_s", "Refit s"),
     ("total_s", "E2E step s"),
 )
+# A V2 arm pairs with the control arm whose name swaps these tags.
+CONTROL_TAGS = (("dspark-k8", "baseline"), ("runahead-p2", "runahead-off"))
 CSS = """
 :root {
   --surface: #fcfcfb; --ink: #0b0b0b; --muted: #52514e; --grid: #e4e3df;
@@ -166,6 +168,12 @@ def driver_runs(path: Path) -> dict[str, dict[str, dict[int, dict[str, float]]]]
     return cohorts
 
 
+def control_arm(arm: str) -> str:
+    for tag, control in CONTROL_TAGS:
+        arm = arm.replace(tag, control)
+    return arm
+
+
 def driver_row(arm: str, steps: dict[int, dict], ref: dict[int, dict] | None) -> str:
     def avg(key: str, on: list[int]) -> float | None:
         xs = [steps[s][key] for s in on if key in steps[s]]
@@ -203,8 +211,8 @@ def driver_table(cohort: str, arms: dict[str, dict[int, dict]]) -> str:
     head = "".join(f"<th>{h}</th>" for h in heads)
     body = "\n".join(
         driver_row(arm, arms[arm], None if arm == ref else arms.get(ref))
-        for arm in sorted(arms, key=lambda a: ("dspark" in a, a))
-        for ref in [arm.replace("dspark-k8", "baseline")]
+        for arm in sorted(arms, key=lambda a: (control_arm(a) != a, a))
+        for ref in [control_arm(arm)]
     )
     return (
         f"<h2>{html.escape(cohort)}: Qwen3-30B-A3B SWE, V2 driver logs</h2>\n"
@@ -237,7 +245,8 @@ def main() -> None:
 arm step time on the steps that both runs logged, shown when at least {MIN_PAIRED} steps pair.
 Above 1x means the arm is faster. SWE runs skip the logprob pass, so LogProb is 0 or about 1 ms.
 The V2 SWE tables at the end come from the driver logs and use steps 2 onward. Their speedup
-pairs each DSpark K8 run with the baseline run of the same cohort and fixes.
+pairs each DSpark K8 run with the baseline run, and each env run-ahead p2 run with its off run,
+of the same cohort and fixes.
 The report text is in <a href="README.md">README.md</a>.</p>
 {tables}
 </body>

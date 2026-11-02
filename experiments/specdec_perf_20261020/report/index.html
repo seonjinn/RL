@@ -40,7 +40,8 @@ a { color: inherit; }
 arm step time on the steps that both runs logged, shown when at least 8 steps pair.
 Above 1x means the arm is faster. SWE runs skip the logprob pass, so LogProb is 0 or about 1 ms.
 The V2 SWE tables at the end come from the driver logs and use steps 2 onward. Their speedup
-pairs each DSpark K8 run with the baseline run of the same cohort and fixes.
+pairs each DSpark K8 run with the baseline run, and each env run-ahead p2 run with its off run,
+of the same cohort and fixes.
 The report text is in <a href="README.md">README.md</a>.</p>
 <h2>n35: Nemotron 3.5 Lightning 30B-A3B, async, sync, default</h2>
 <div class="wrap"><table><thead><tr><th>Arm</th><th>Drafter</th><th>K</th><th>Steps</th><th>Gen s</th><th>Train s</th><th>LogProb s</th><th>Refit s</th><th>E2E step s</th><th>tok/s/GPU</th><th>Gen tok/s/GPU</th><th>Accept len</th><th>E2E speedup</th><th>Gen speedup</th><th>Control</th><th>State</th></tr></thead>
@@ -299,6 +300,12 @@ The report text is in <a href="README.md">README.md</a>.</p>
 <tbody>
 <tr><td>r16-t4-rf-eval450-drop4-regen-frozen-baseline-l5</td><td>2-16</td><td>215.2</td><td>117.7</td><td>31.6</td><td>7.3</td><td>377.5</td><td>2.00</td><td>3</td><td>-</td></tr>
 <tr><td>r16-t4-rf-eval450-drop4-regen-frozen-dspark-k8-l5</td><td>2-16</td><td>165.4</td><td>118.8</td><td>31.8</td><td>7.8</td><td>329.9</td><td>2.00</td><td>3</td><td class="good">1.14x</td></tr>
+</tbody></table></div>
+<h2>swe-runahead1031: Qwen3-30B-A3B SWE, V2 driver logs</h2>
+<div class="wrap"><table><thead><tr><th>Arm</th><th>Steps</th><th>Gen s</th><th>Train s</th><th>LogProb s</th><th>Refit s</th><th>E2E step s</th><th>Lag mean</th><th>Lag max</th><th>E2E speedup</th></tr></thead>
+<tbody>
+<tr><td>r16-rf-eval450-drop5-baseline-l0-runahead-off</td><td>2-20</td><td>126.1</td><td>28.5</td><td>7.8</td><td>5.9</td><td>180.1</td><td>1.74</td><td>3</td><td>-</td></tr>
+<tr><td>r16-rf-eval450-drop5-baseline-l0-runahead-p2</td><td>2-20</td><td>102.5</td><td>30.1</td><td>7.9</td><td>6.0</td><td>159.2</td><td>1.63</td><td>4</td><td class="good">1.13x</td></tr>
 </tbody></table></div>
 <h2>swe-tosd1024: Qwen3-30B-A3B SWE, V2 driver logs</h2>
 <div class="wrap"><table><thead><tr><th>Arm</th><th>Steps</th><th>Gen s</th><th>Train s</th><th>LogProb s</th><th>Refit s</th><th>E2E step s</th><th>Lag mean</th><th>Lag max</th><th>E2E speedup</th></tr></thead>

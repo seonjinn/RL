@@ -6,8 +6,9 @@ The SC driver prints a timing block and a `train step N/M trainer_v=V lag=L`
 line for each step, plus one step_metrics dict. The script writes two tables
 keyed by run directory name: swe_driver_steps.csv (phase times and trainer lag)
 and swe_driver_metrics.csv (reward and off-policy metrics). It then prints the
-GBS 512 pair, the staleness 2 pairs and the staleness 1 vs 2 quality check.
-Step 1 holds the cold start, so step times use steps 2 onward.
+GBS 512 pair, the staleness 2 pairs, the staleness 1 vs 2 quality check and
+the env run-ahead pairs. Step 1 holds the cold start, so step times use steps
+2 onward.
 """
 
 import csv
@@ -35,6 +36,10 @@ METRICS = {
     "probs_ratio_clamped": "probs_ratio_clamped",
     "grad_norm": "grad_norm",
     "approx_entropy": "approx_entropy",
+    "swe_agents_train/prewarm_adopted/mean": "prewarm_adopted",
+    "swe_agents_train/prewarm_mismatch/mean": "prewarm_mismatch",
+    "swe_agents_train/prewarm_expired/mean": "prewarm_expired",
+    "swe_agents_train/prewarm_hold_time/mean": "prewarm_hold_s",
 }
 NUM = r"(?:np\.float\d+\()?(-?[\d.]+(?:e[+-]?\d+)?|nan|inf)"
 # Ray prefixes actor output with "(ActorName pid=N)" in ANSI color.
@@ -53,6 +58,11 @@ STEP_PAIRS = [
         "dspark-k8-l0-staleness2-r2",
         32,
     ),
+]
+# Env run-ahead A/B at GBS 32, staleness 1: (label, off arm, prewarm arm).
+RUNAHEAD_PAIRS = [
+    ("R1", "baseline-l0-runahead-off", "baseline-l0-runahead-p2"),
+    ("R2", "baseline-l0-runahead-off-r2", "baseline-l0-runahead-p2-r2"),
 ]
 QUALITY = {
     1: [
@@ -73,7 +83,8 @@ QUALITY = {
 def parse(path: Path) -> tuple[list[dict], list[dict]]:
     steps, metrics, block = [], [], {}
     for line in path.read_text(errors="replace").splitlines():
-        line = RAY_PREFIX.sub("", line).strip()
+        # Newer SC drivers print the per-step dict as `step_metrics={...}`.
+        line = RAY_PREFIX.sub("", line).strip().removeprefix("step_metrics=")
         if m := re.match(r"• ([\w ]+?): ([\d.]+)s", line):
             if m.group(1) in TIMING:
                 block[TIMING[m.group(1)]] = float(m.group(2))
@@ -200,6 +211,52 @@ def main() -> None:
     print(
         f"reward staleness 2 - staleness 1: {100 * (reward[2].mean() - reward[1].mean()):+.1f}pp [{100 * lo:+.1f}, {100 * hi:+.1f}]"
     )
+
+    runahead(steps, metrics)
+
+
+def runahead(steps: dict[str, list[dict]], metrics: dict[str, list[dict]]) -> None:
+    pooled = {"off": [], "p2": []}
+    for label, off_run, p2_run in RUNAHEAD_PAIRS:
+        if not any(k.endswith("-" + p2_run) for k in steps):
+            continue
+        off, p2 = by_suffix(steps, off_run), by_suffix(steps, p2_run)
+        n = min(len(off), len(p2))
+        ot, pt = (np.array([s["total_s"] for s in x[1:n]]) for x in (off, p2))
+        oe, pe = (
+            np.array([s["exposed_generation_s"] for s in x[1:n]]) for x in (off, p2)
+        )
+        lo, hi = boot_ratio(ot, pt)
+        elo, ehi = boot_ratio(oe, pe)
+        print(
+            f"Run-ahead {label}, steps 2-{n}: off {ot.mean():.1f} s, p2 {pt.mean():.1f} s, step {ot.mean() / pt.mean():.2f}x "
+            f"[{lo:.2f}, {hi:.2f}], exposed {oe.mean():.1f} -> {pe.mean():.1f} s {oe.mean() / pe.mean():.2f}x [{elo:.2f}, {ehi:.2f}]"
+        )
+        for k in TIMING.values():
+            print(
+                f"    {k:<22} off {np.mean([s[k] for s in off[1:n]]):6.1f}  p2 {np.mean([s[k] for s in p2[1:n]]):6.1f}"
+            )
+        om, pm = by_suffix(metrics, off_run)[1:n], by_suffix(metrics, p2_run)[1:n]
+        print(
+            f"    reward off {np.mean([r['reward'] for r in om]):.4f} p2 {np.mean([r['reward'] for r in pm]):.4f}, "
+            + " ".join(
+                f"{k} {np.mean([r[k] for r in pm]):.2f}"
+                for k in (
+                    "prewarm_adopted",
+                    "prewarm_mismatch",
+                    "prewarm_expired",
+                    "prewarm_hold_s",
+                )
+            )
+        )
+        pooled["off"] += list(ot)
+        pooled["p2"] += list(pt)
+    if len(pooled["off"]) > 0:
+        ot, pt = np.array(pooled["off"]), np.array(pooled["p2"])
+        lo, hi = boot_ratio(ot, pt)
+        print(
+            f"Run-ahead pooled n={len(ot)}: off {ot.mean():.1f} s, p2 {pt.mean():.1f} s, step {ot.mean() / pt.mean():.2f}x [{lo:.2f}, {hi:.2f}]"
+        )
 
 
 if __name__ == "__main__":
