@@ -127,6 +127,31 @@ def _model_cfg(**overrides: Any) -> SimpleNamespace:
     return SimpleNamespace(**fields)
 
 
+@pytest.mark.parametrize("make_provider", [_provider, _dspark_provider])
+def test_draft_setup_rejects_policy_logits_storage_reuse(
+    make_provider: Callable[[], Any],
+) -> None:
+    config: dict[str, Any] = {
+        "megatron_cfg": {"reuse_logits_storage": True},
+        "sequence_packing": {"enabled": True, "fuse_loss": True},
+        "generation": None,
+    }
+
+    with pytest.raises(ValueError, match="reuse_logits_storage=false"):
+        _validate_draft_training_setup(
+            draft_provider=make_provider(),
+            config=config,
+            model_cfg=_model_cfg(),
+        )
+
+    config["megatron_cfg"]["reuse_logits_storage"] = False
+    _validate_draft_training_setup(
+        draft_provider=make_provider(),
+        config=config,
+        model_cfg=_model_cfg(),
+    )
+
+
 def test_dflash_setup_rejects_layout_and_target_mismatches_together() -> None:
     config = {
         "megatron_cfg": {"use_fused_linear_logprobs": True},

@@ -273,11 +273,21 @@ def _validate_draft_training_setup(
     config: PolicyConfig,
     model_cfg: Any,
 ) -> None:
-    """Reject layouts that do not preserve block-draft plan/tensor semantics."""
-    if draft_provider is None or draft_provider.config.speculator_type not in (
-        "dflash",
-        "dspark",
+    """Reject setups that break the draft teacher or block-draft semantics."""
+    if draft_provider is None:
+        return
+    megatron_config = config.get("megatron_cfg")
+    # The draft loss reads the policy logits as its teacher. Storage reuse
+    # overwrites them with the policy-loss grad during backward.
+    if (
+        megatron_config is not None
+        and megatron_config.get("reuse_logits_storage") is True
     ):
+        raise ValueError(
+            "draft co-training reads the policy logits as the draft teacher; "
+            "set policy.megatron_cfg.reuse_logits_storage=false"
+        )
+    if draft_provider.config.speculator_type not in ("dflash", "dspark"):
         return
     method = draft_provider.config.speculator_type
     display_method = "DFlash" if method == "dflash" else "DSpark"
@@ -320,7 +330,6 @@ def _validate_draft_training_setup(
         unsupported.append(
             "sequence_parallel requires sequence_packing.enabled=true for draft training"
         )
-    megatron_config = config.get("megatron_cfg")
     if (
         megatron_config is not None
         and megatron_config.get("use_fused_linear_logprobs") is True
