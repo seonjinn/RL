@@ -162,6 +162,9 @@ def _make_worker(loss_type):
     w.dp_size = 2
     w.sampling_params = None
     w.draft_model = None
+    # Draft updates on, mirroring __init__.
+    w._draft_update_enabled = True
+    w._skipped_draft_parameters = None
     w.defer_fp32_logits = False
     w.dtype = torch.float32
     w._is_reward_model = False
