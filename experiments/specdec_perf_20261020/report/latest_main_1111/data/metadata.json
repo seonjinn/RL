@@ -1,0 +1,8 @@
+{
+  "round1": {"commit": "44fdede940", "upstream_main": "f488a0c6eb", "cluster": "OCI-HSG GB200", "jobs": {"q30-4n4g-baseline-w44fde": 8867775, "q30-4n4g-frozen-dflash-k7-w44fde": 8867776, "q30-4n4g-frozen-dspark-k8-w44fde": 8867778, "n35-4n4g-baseline-nopc-w44fde": 8867779, "n35-4n4g-frozen-dflash-k7-w44fde": 8867780, "n35-4n4g-frozen-dspark-k8-w44fde": 8867781}},
+  "round2": {"commit": "39209b281f", "cluster": "OCI-HSG GB200", "jobs": {"q35-4n4g-baseline-nopc-gmu08-w3920": 8869839, "q35-4n4g-frozen-dflash-k7-gmu08-w3920": 8869840, "q35-4n4g-frozen-dspark-k8-gmu08-w3920": 8869841, "swe-q30-sc-rf450d4-baseline-w3920": 8869850, "swe-q30-sc-rf450d4-frozen-dflash-k7-w3920": 8870408, "swe-q30-sc-rf450d4-frozen-dspark-k8-w3920": 8870409}},
+  "pending": {"q235-16n4g-tp8-baseline-s64-w3920": 8869842, "q235-16n4g-frozen-dflash-k3-w3920": 8869844, "q235-16n4g-frozen-dspark-k4-w3920": 8869845, "q35-4n4g-frozen-dflash-k3-gmu08-w3920": 8877452, "q35-4n4g-frozen-dspark-k4-gmu08-w3920": 8877453},
+  "wandb_project": "sna-async-grpo-gb200",
+  "window": "trainer steps 3-20",
+  "extract": "extract_metrics.py --out <dir> <runs>"
+}
