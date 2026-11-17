@@ -1,0 +1,5 @@
+# Tail-drop arm: swe_traj_l0_staleness2_drop5.yaml without the five tail instances.
+# Only data.train.data_path differs from the control.
+defaults:
+  - swe_traj_l0_staleness2_drop5.yaml
+  - drop_tail_instances.yaml

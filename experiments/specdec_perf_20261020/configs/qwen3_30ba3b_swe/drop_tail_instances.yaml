@@ -1,0 +1,14 @@
+# Train on balanced_language_drop5.jsonl without five tail instances.
+# In eight GBS 32 runs (stale2 and run-ahead A/B, 10-30 to 11-01), each one resolved 0 of 64
+# attempts and had a mean group span of 380-788 s, against a p50 of 174 s and a p90 of 294 s:
+#   singapore__renovate-527 (788 s, 600 s init timeout), jtablesaw__tablesaw-559 (599 s),
+#   kroxylicious__kroxylicious-586 (483 s), juliasymbolics__symbolics.jl-552 (441 s),
+#   graphhopper__graphhopper-1911 (380 s).
+# A group with zero resolves has zero advantage, so these groups set the step time and give no gradient.
+# The loader does not shuffle, so later lines move up to take their place.
+# Rebuild the file from balanced_language_drop5.jsonl with:
+#   python filter_swe_instances.py <balanced_language_drop5.jsonl> <this data_path> singapore__renovate-527 \
+#     jtablesaw__tablesaw-559 kroxylicious__kroxylicious-586 juliasymbolics__symbolics.jl-552 graphhopper__graphhopper-1911
+data:
+  train:
+    data_path: /lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/datasets/swe/balanced_language_drop5_tail5.jsonl

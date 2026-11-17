@@ -1,0 +1,5 @@
+# Staleness-2 control for the tail-drop A/B: the run-ahead control arm (env run-ahead off) with
+# two batches of ready-first admission lookahead.
+defaults:
+  - swe_traj_l0_baseline_runahead_off.yaml
+  - rf_staleness2.yaml
