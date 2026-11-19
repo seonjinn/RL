@@ -1,0 +1,13 @@
+# K sweep: async 1-off recipe + frozen DSpark at K=6, trained block 8. 128 seqs/engine, graphs to 896 tokens.
+defaults:
+  - ../../../../examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-async-1off.yaml
+  - spec_frozen_dspark_k8.yaml
+  - capture_k6_s128.yaml
+  - async_mbt16k.yaml
+policy:
+  generation:
+    vllm_kwargs:
+      speculative_config:
+        num_speculative_tokens: 6
+checkpointing:
+  enabled: false

@@ -1,0 +1,12 @@
+# Control for the sync SpecDec arms: sync baseline with prefix caching off, as the spec fragments
+# set it, and 128 seqs/engine like those arms. Only the drafter then differs.
+defaults:
+  - baseline_sync.yaml
+policy:
+  generation:
+    vllm_cfg:
+      enable_prefix_caching: false
+    vllm_kwargs:
+      max_num_seqs: 128
+checkpointing:
+  enabled: false

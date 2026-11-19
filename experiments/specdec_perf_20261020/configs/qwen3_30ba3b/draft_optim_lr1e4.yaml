@@ -1,0 +1,10 @@
+# Draft-only learning rate for online co-training. Without policy.draft.optimizer the Megatron
+# draft param group inherits the policy RL lr (3e-7 with 50-step warmup for Q30 math, 1e-6 for
+# SWE), so a pretrained drafter barely moves in 20 steps: draft loss stays flat and accept length
+# matches the frozen arm step for step. 1e-4 is the Automodel draft default
+# (policy.draft.learning_rate). The policy warmup schedule still applies to this group.
+policy:
+  draft:
+    optimizer:
+      lr: 1.0e-4
+      min_lr: 1.0e-4

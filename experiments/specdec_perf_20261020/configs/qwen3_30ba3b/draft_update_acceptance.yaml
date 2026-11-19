@@ -1,0 +1,6 @@
+# Pause online draft training while the rollout acceptance length stops improving
+# (2% relative gain, patience 2). Resume on a 5% drop below the paused level.
+policy:
+  draft:
+    update_schedule:
+      type: acceptance

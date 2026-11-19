@@ -1,0 +1,9 @@
+# K3 spec arms: cap concurrency at 128 seqs/engine and capture CUDA graphs up to
+# 128 x (K3+1) = 512 verify tokens. Sizes from 4 up are multiples of K+1 for every
+# request count up to 32 and every even count above, so uniform verify batches land on a FULL graph.
+policy:
+  generation:
+    vllm_kwargs:
+      max_num_seqs: 128
+      compilation_config:
+        cudagraph_capture_sizes: [1, 2, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60, 64, 68, 72, 76, 80, 84, 88, 92, 96, 100, 104, 108, 112, 116, 120, 124, 128, 136, 144, 152, 160, 168, 176, 184, 192, 200, 208, 216, 224, 232, 240, 248, 256, 264, 272, 280, 288, 296, 304, 312, 320, 328, 336, 344, 352, 360, 368, 376, 384, 392, 400, 408, 416, 424, 432, 440, 448, 456, 464, 472, 480, 488, 496, 504, 512]

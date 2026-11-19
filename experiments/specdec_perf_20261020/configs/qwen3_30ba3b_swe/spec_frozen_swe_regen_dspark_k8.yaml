@@ -1,0 +1,12 @@
+# Frozen DSpark drafter trained on regenerated SWE trajectories of Qwen3-30B-A3B-Thinking-2507
+# (step 7010, same corpus and ~0.75 epoch as the SWA8k DFlash at s28050). Window-8192 SWA,
+# block_size 8, K=8 = block_size. vllm-export-7010 is the Qwen3DSparkModel layout: the training
+# pin exports DSpark as DFlashDraftModel with flat head keys, which vLLM does not load.
+policy:
+  generation:
+    vllm_kwargs:
+      speculative_config:
+        method: dspark
+        model: /lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/specdec_ptv23/swe_regen_q30t/full/q30t-swe-regen-dspark-rp25swa8k-b8-n32-s7010/vllm-export-7010
+        num_speculative_tokens: 8
+        draft_tensor_parallel_size: 1

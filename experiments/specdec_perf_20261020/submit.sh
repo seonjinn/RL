@@ -1,0 +1,88 @@
+#!/bin/bash
+# Submit one GRPO arm on OCI-HSG with ray.sub (run from anywhere inside the repo).
+#
+#   submit.sh <config.yaml> <run_name> [max_steps] [extra overrides...]
+#
+# Env knobs:
+#   NUM_ACTOR_NODES      nodes to allocate (default 4, the 4n4g recipe size)
+#   SEGMENT              nodes that must share one NVL72 domain (default NUM_ACTOR_NODES)
+#   FORCE_REBUILD_VENVS  default true. The nightly image sets NEMO_RL_VENV_DIR=/opt/ray_venvs,
+#                        so venvs are per-job and container-local. Its prebuilt venvs pin the
+#                        image's own Megatron-Bridge and vLLM, and that Bridge imports
+#                        te_checkpoint, which this checkout's Megatron-LM lacks.
+#   CONTAINER            sqsh image (default: latest staged nightly symlink)
+#   TIME                 walltime (default 04:00:00)
+#   GDN_METADATA_REUSE=1 load the vLLM 0.29 GDN metadata reuse backport (vllm_gdn_metadata_reuse/)
+#   ACCOUNT              Slurm account (default coreai_dlalgo_nemorl)
+#   TEST_ONLY=1          sbatch --test-only
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+# Jobs build venvs from the submodule checkouts, and their pins move with the branch
+git submodule update --init --recursive
+
+CONFIG=$1
+RUN_NAME=$2
+STEPS=${3:-20}
+shift $(( $# < 3 ? $# : 3 ))
+
+U=/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna
+EXP_DIR=experiments/specdec_perf_20261020
+account=${ACCOUNT:-coreai_dlalgo_nemorl}
+NUM_ACTOR_NODES=${NUM_ACTOR_NODES:-4}
+# ray.sub defaults to 8 and rejects GB200's gpu:4 GRES unless this is exported
+export GPUS_PER_NODE=4
+
+REBUILD=""
+if [[ "${FORCE_REBUILD_VENVS:-true}" == true ]]; then
+  REBUILD="NRL_FORCE_REBUILD_VENVS=true "
+fi
+# Ray workers get the driver's PYTHONPATH through init_ray's runtime_env. Base-venv workers
+# (/opt/nemo_rl_venv) otherwise import nemo_rl from the image's editable /opt/nemo-rl, which can
+# predate this checkout: init_ray's worker_process_setup_hook then fails to import
+# nemo_rl.distributed.ray_worker_setup (added in #4809) and every such worker dies at startup.
+PYPATH=$(pwd)
+# The backport's sitecustomize has to come first on the path so it runs in every vLLM worker
+if [[ "${GDN_METADATA_REUSE:-0}" == 1 ]]; then
+  PYPATH=$(pwd)/${EXP_DIR}/vllm_gdn_metadata_reuse:${PYPATH}
+fi
+REBUILD+="PYTHONPATH=${PYPATH}\${PYTHONPATH:+:\$PYTHONPATH} "
+
+# grpo_math_1B.yaml's draft block keeps Eagle3-only keys that the Megatron DFlash/DSpark
+# draft configs (extra="forbid") reject at MasterConfig validation, so online arms drop them
+DRAFT_DELETES=""
+if grep -q draft_online_ "${CONFIG}"; then
+  for k in token_chunk_size learning_rate ttt_steps ttt_step_loss_decay train_embed_and_head; do
+    DRAFT_DELETES+="'~policy.draft.${k}' "
+  done
+fi
+
+# checkpointing stays off: workspace runs must not grow lustre inode/space usage. The env flag
+# is the only switch for the per-step train_data_step*.jsonl rollout dump (about 340 MB per step
+# at 4K); the dump runs after the step timer, so turning it off does not change step timings.
+COMMAND="${REBUILD}uv run examples/run_grpo.py --config ${CONFIG} grpo.max_num_steps=${STEPS} checkpointing.enabled=false ++env.should_log_nemo_gym_responses=true logger.log_dir=${EXP_DIR}/exp_logs/${RUN_NAME} logger.wandb_enabled=True logger.wandb.project='sna-async-grpo-gb200' logger.wandb.name='${RUN_NAME}' ${DRAFT_DELETES}$*"
+
+mkdir -p "${EXP_DIR}/logs"
+export CONTAINER=${CONTAINER:-$U/containers/nemo_rl_nightly.sqsh}
+export HF_HOME=$U/hf_home
+export HF_DATASETS_CACHE=$U/hf_home/cache
+# Model and data are cached; offline mode stops Hub 429s from hundreds of workers
+unset HF_TOKEN
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1
+export WANDB_API_KEY
+export MOUNTS="/lustre:/lustre"
+export COMMAND
+export BASE_LOG_DIR=${EXP_DIR}/logs/${RUN_NAME}
+mkdir -p "${BASE_LOG_DIR}"
+
+echo "commit=$(git rev-parse HEAD) container=$(readlink -f "$CONTAINER")"
+echo "COMMAND=${COMMAND}"
+sbatch ${TEST_ONLY:+--test-only} \
+  --nodes="${NUM_ACTOR_NODES}" \
+  --account="${account}" \
+  --job-name="${account}.${RUN_NAME}" \
+  --partition=batch \
+  --time="${TIME:-04:00:00}" \
+  --gres=gpu:${GPUS_PER_NODE} \
+  --segment "${SEGMENT:-${NUM_ACTOR_NODES}}" \
+  ray.sub

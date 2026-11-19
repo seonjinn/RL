@@ -1,0 +1,20 @@
+# Nemotron 3.5 Lightning 30B-A3B on top of a Q30 perf recipe. NemotronH: 23 Mamba2, 23 MoE and
+# 6 attention layers, squared-ReLU experts plus a shared expert, sigmoid router with expert bias,
+# one MTP layer. Data, env, batch sizes and the HybridEP dispatcher stay as in the Q30 recipe; only
+# the model and the NemotronH settings of the in-tree Nemotron 3 Nano/Super recipes change.
+policy:
+  model_name: nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16
+  tokenizer:
+    name: nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16
+  make_sequence_length_divisible_by: 8
+  megatron_cfg:
+    # Squared ReLU has no fused bias-activation kernel
+    bias_activation_fusion: false
+    moe_router_dtype: fp32
+    moe_router_enable_expert_bias: true
+    moe_router_bias_update_rate: 0.001
+    # Training skips the checkpoint's MTP layer, and vLLM ignores it without a speculative_config
+    mtp_num_layers: 0
+  generation:
+    vllm_cfg:
+      enforce_eager: false

@@ -1,0 +1,8 @@
+# Async 1-off recipe + frozen DSpark, K=8, 256 seqs/engine (= 2048 rollouts / 8 engines), graphs to 2304 tokens.
+defaults:
+  - ../../../../examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-async-1off.yaml
+  - spec_frozen_dspark_k8.yaml
+  - capture_k8_s256.yaml
+  - async_mbt16k.yaml
+checkpointing:
+  enabled: false

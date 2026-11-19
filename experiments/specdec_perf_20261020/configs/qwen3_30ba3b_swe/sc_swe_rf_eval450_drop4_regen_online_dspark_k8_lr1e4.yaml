@@ -1,0 +1,8 @@
+# V2 online SWE-regen DSpark K8, draft lr 1e-4, on the ready-first + 450 s eval + drop4 base.
+# Reference arm for the draft update schedule: the draft trains on every step.
+defaults:
+  - swe_regen_online_dspark_k8_lr1e4.yaml
+  - single_controller.yaml
+  - ready_first.yaml
+  - eval_timeout450.yaml
+  - drop_capped_instances.yaml

@@ -1,0 +1,13 @@
+# K sweep: async 1-off recipe + frozen DFlash at K=3, trained block 8. 128 seqs/engine, graphs to 512 tokens.
+defaults:
+  - ../../../../examples/configs/recipes/llm/performance/grpo-qwen3-235b-32n4g-async-1off.yaml
+  - spec_frozen_dflash_k7.yaml
+  - ../qwen3_30ba3b/capture_k3_s128.yaml
+  - ../qwen3_30ba3b/async_mbt16k.yaml
+policy:
+  generation:
+    vllm_kwargs:
+      speculative_config:
+        num_speculative_tokens: 3
+checkpointing:
+  enabled: false

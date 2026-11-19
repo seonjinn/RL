@@ -1,0 +1,6 @@
+# Sync frozen DSpark K=8 at 32K.
+defaults:
+  - frozen_dspark_k8.yaml
+  - seq32k.yaml
+checkpointing:
+  enabled: false

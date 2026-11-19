@@ -1,0 +1,5 @@
+# Same as sc_swe_rf_eval450_drop4_regen_online_dspark_k8_lr1e4.yaml, but the draft trains only
+# on steps 0, 5, 10 and 15. The only change is the draft update schedule.
+defaults:
+  - sc_swe_rf_eval450_drop4_regen_online_dspark_k8_lr1e4.yaml
+  - ../qwen3_30ba3b/draft_update_interval5.yaml

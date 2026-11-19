@@ -1,0 +1,6 @@
+# Frozen DSpark K=8 at the TP2 training layout of the online DSpark arms. It is the no-training
+# reference for the draft update schedule arms (online_dspark_k8_lr1e4*.yaml).
+defaults:
+  - tp2_baseline.yaml
+  - spec_frozen_dspark_k8.yaml
+  - capture_k8_s128.yaml

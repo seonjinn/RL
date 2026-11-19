@@ -1,0 +1,4 @@
+# DAPO 40K port, no SpecDec, vLLM default max_num_seqs (the 2026-09-12 "default" baseline).
+defaults: dapo40k.yaml
+checkpointing:
+  enabled: false

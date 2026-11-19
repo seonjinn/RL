@@ -1,0 +1,13 @@
+# SWE baseline + online DFlash co-training from the SWE-regen drafter, K=7, draft lr 1e-4,
+# refit into vLLM every step. The delta to swe_regen_frozen_dflash_k7 is the draft training.
+# Training must use the same 8192-token window as the checkpoint (vLLM reads it from the
+# checkpoint config). The draft build fails if the two windows differ.
+defaults:
+  - swe_baseline.yaml
+  - ../qwen3_30ba3b/draft_online_dflash_k7.yaml
+  - ../qwen3_30ba3b/capture_k7_s128.yaml
+  - ../qwen3_30ba3b/draft_optim_lr1e4.yaml
+policy:
+  draft:
+    model_name: /lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/specdec_ptv23/swe_regen_q30t/full/q30t-swe-regen-rp25swa8k-b8-s28050/exported-checkpoint-28050
+    sliding_window: 8192

@@ -1,0 +1,14 @@
+# Control for the sync spec arms: no SpecDec, same vLLM TP8 PP1 layout, 64 seqs/engine, graphs to 64 tokens.
+# The recipe as-is (TP4 PP2, graphs only to 32) differs from the spec arms in layout and graph
+# coverage, so it is a reference, not the comparator.
+defaults:
+  - ../../../../examples/configs/recipes/llm/performance/grpo-qwen3-235b-16n4g.yaml
+  - sync_vllm_tp8.yaml
+checkpointing:
+  enabled: false
+policy:
+  generation:
+    vllm_kwargs:
+      max_num_seqs: 64
+      compilation_config:
+        cudagraph_capture_sizes: [1, 2, 4, 8, 16, 24, 32, 40, 48, 56, 64]

@@ -1,0 +1,15 @@
+# Q35 hybrid K sweep: frozen DFlash at K=3 and gpu_memory_utilization 0.8. vLLM 0.29 holds 1+K
+# GDN state blocks per layer group per request, so a 4K request needs 169 KV blocks at K3 vs 289
+# at K7, and the sync batch fits about 1.7x more sequences.
+defaults:
+  - baseline_sync.yaml
+  - spec_frozen_dflash_k7.yaml
+  - ../qwen3_30ba3b/capture_k3_s128.yaml
+  - gmu08.yaml
+policy:
+  generation:
+    vllm_kwargs:
+      speculative_config:
+        num_speculative_tokens: 3
+checkpointing:
+  enabled: false

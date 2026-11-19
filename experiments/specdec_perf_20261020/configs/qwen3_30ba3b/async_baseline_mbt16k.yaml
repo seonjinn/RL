@@ -1,0 +1,6 @@
+# Control: async recipe as-is plus only the 16384-token scheduler budget the async SpecDec arms use.
+defaults:
+  - ../../../../examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-async-1off.yaml
+  - async_mbt16k.yaml
+checkpointing:
+  enabled: false

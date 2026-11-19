@@ -1,0 +1,4 @@
+# swe_online_dspark_k8.yaml with a draft-only lr of 1e-4 instead of the inherited policy lr.
+defaults:
+  - swe_online_dspark_k8.yaml
+  - ../qwen3_30ba3b/draft_optim_lr1e4.yaml

@@ -1,0 +1,12 @@
+# K sweep: sync perf recipe + frozen DFlash at K=3, trained block 8. 128 seqs/engine, graphs to 512 tokens.
+defaults:
+  - ../../../../examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml
+  - spec_frozen_dflash_k7.yaml
+  - capture_k3_s128.yaml
+policy:
+  generation:
+    vllm_kwargs:
+      speculative_config:
+        num_speculative_tokens: 3
+checkpointing:
+  enabled: false

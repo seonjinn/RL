@@ -1,0 +1,11 @@
+# Frozen DFlash drafter trained against Qwen3-235B-A22B-Thinking-2507 (262K positions,
+# rope_theta 5e6, same as the target). block_size 8 comes from the checkpoint.
+# K=7 (num_speculative_tokens) = block_size - 1. Target layers [1,24,46,68,91].
+policy:
+  generation:
+    vllm_kwargs:
+      speculative_config:
+        method: dflash
+        model: /lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/modelopt-specdec/assets/thinking-drafters/nemotron-post-v2-b8-s25391/q235-thinking-nemotron-v2-dflash-b8-s25391/exported-checkpoint-25391
+        num_speculative_tokens: 7
+        draft_tensor_parallel_size: 1

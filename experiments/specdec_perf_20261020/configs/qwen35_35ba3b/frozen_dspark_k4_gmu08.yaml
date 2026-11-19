@@ -1,0 +1,15 @@
+# Q35 hybrid K sweep: frozen DSpark at K=4 and gpu_memory_utilization 0.8. vLLM 0.29 holds 1+K
+# GDN state blocks per layer group per request, so a 4K request needs 42 KV blocks at K4 vs 62 at
+# K8. The drafter proposes a K-token block (anchor + K-1 noise); only Qwen3-Omni pins K to block_size.
+defaults:
+  - baseline_sync.yaml
+  - spec_frozen_dspark_k8.yaml
+  - ../qwen3_30ba3b/capture_k4_s128.yaml
+  - gmu08.yaml
+policy:
+  generation:
+    vllm_kwargs:
+      speculative_config:
+        num_speculative_tokens: 4
+checkpointing:
+  enabled: false

@@ -1,0 +1,10 @@
+# Control for the async s128 SpecDec arms: async baseline with their 16384-token scheduler budget
+# and prefix caching off, as the spec fragments set it. Only the drafter then differs.
+defaults:
+  - async_baseline_mbt16k.yaml
+policy:
+  generation:
+    vllm_cfg:
+      enable_prefix_caching: false
+checkpointing:
+  enabled: false

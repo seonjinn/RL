@@ -1,0 +1,10 @@
+# DFlash K7 sync spec arms: cap concurrency at 64 seqs/engine (= 512 rollouts / 8 engines) and
+# capture CUDA graphs up to 64 x (K7+1) = 512 verify tokens. The recipe captures only to 32.
+# Sizes from 8 up are multiples of K+1 for every request count up to 32 and every even count
+# above, so uniform verify batches land on a FULL graph.
+policy:
+  generation:
+    vllm_kwargs:
+      max_num_seqs: 64
+      compilation_config:
+        cudagraph_capture_sizes: [1, 2, 4, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, 144, 152, 160, 168, 176, 184, 192, 200, 208, 216, 224, 232, 240, 248, 256, 272, 288, 304, 320, 336, 352, 368, 384, 400, 416, 432, 448, 464, 480, 496, 512]

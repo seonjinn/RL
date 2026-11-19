@@ -1,0 +1,70 @@
+{
+  "arm": "dspark_k4",
+  "vllm_version": "0.29.0",
+  "kv_cache_groups": 8,
+  "layers_per_group": [
+    5,
+    6
+  ],
+  "group_spec_types": [
+    "FullAttentionSpec",
+    "MambaSpec",
+    "SlidingWindowSpec"
+  ],
+  "init_s": 255.3319805013016,
+  "kv_cache_layout": "LBHNC",
+  "num_gpu_blocks": 5203,
+  "phases": [
+    {
+      "batch": 32,
+      "wall_s": 15.578588077798486,
+      "output_tokens": 65536,
+      "tok_per_s": 4206.799722331533,
+      "engine_steps": 1261,
+      "step_ms": 12.354153907849712,
+      "tokens_per_req_step": 1.6241078509119746,
+      "execute_model_cpu_ms": 3.6970127254287277,
+      "sample_tokens_cpu_ms": 2.049359202704006,
+      "attn_md_calls_per_step": 1.9984139571768438,
+      "attn_md_cpu_ms_per_step": 2.505984071651023,
+      "runner": [
+        "vllm.v1.worker.gpu.model_runner"
+      ],
+      "mean_accept_len": 2.571714476317545
+    },
+    {
+      "batch": 64,
+      "wall_s": 22.197075239382684,
+      "output_tokens": 131072,
+      "tok_per_s": 5904.922093855334,
+      "engine_steps": 1805,
+      "step_ms": 12.29754860907628,
+      "tokens_per_req_step": 1.1346260387811635,
+      "execute_model_cpu_ms": 3.5524906714413307,
+      "sample_tokens_cpu_ms": 2.085579916772915,
+      "attn_md_calls_per_step": 1.9988919667590028,
+      "attn_md_cpu_ms_per_step": 2.405313995261767,
+      "runner": [
+        "vllm.v1.worker.gpu.model_runner"
+      ],
+      "mean_accept_len": 2.5705629742926055
+    },
+    {
+      "batch": 128,
+      "wall_s": 26.949262971058488,
+      "output_tokens": 262144,
+      "tok_per_s": 9727.31611552877,
+      "engine_steps": 1494,
+      "step_ms": 18.038328628553206,
+      "tokens_per_req_step": 1.3708165997322623,
+      "execute_model_cpu_ms": 4.012080230482092,
+      "sample_tokens_cpu_ms": 2.3439577980144035,
+      "attn_md_calls_per_step": 1.998661311914324,
+      "attn_md_cpu_ms_per_step": 2.6523555850876943,
+      "runner": [
+        "vllm.v1.worker.gpu.model_runner"
+      ],
+      "mean_accept_len": 2.643990883972329
+    }
+  ]
+}

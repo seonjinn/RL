@@ -1,0 +1,6 @@
+# Async 1-off baseline on DAPO-Math-17k, no SpecDec.
+defaults:
+  - async_baseline_mbt16k.yaml
+  - dapo.yaml
+checkpointing:
+  enabled: false

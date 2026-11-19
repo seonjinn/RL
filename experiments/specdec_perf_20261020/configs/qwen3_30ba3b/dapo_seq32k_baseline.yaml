@@ -1,0 +1,6 @@
+# Sync perf recipe at 32K on DAPO-Math-17k.
+defaults:
+  - seq32k_baseline.yaml
+  - dapo.yaml
+checkpointing:
+  enabled: false

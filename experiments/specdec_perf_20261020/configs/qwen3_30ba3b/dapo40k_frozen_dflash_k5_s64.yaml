@@ -1,0 +1,17 @@
+# DAPO 40K port, frozen PTV3-SWA DFlash (block 8, SWA 2048) at K5, 64 seqs/engine.
+# Capture sizes follow the 2026-09-12 rule: powers of two up to 64 requests at widths 1 and K+1.
+defaults: dapo40k.yaml
+policy:
+  generation:
+    vllm_kwargs:
+      max_num_seqs: 64
+      compilation_config:
+        cudagraph_capture_sizes: [1, 2, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 192, 384]
+      speculative_config:
+        method: dflash
+        model: /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/specdec_ptv23/ptv3_swa/sd2p3swa-q30-base-ptv3swe-dflash-b8-16n/exported-checkpoint-44000
+        num_speculative_tokens: 5
+        draft_tensor_parallel_size: 1
+        attention_backend: FLASH_ATTN
+checkpointing:
+  enabled: false

@@ -1,0 +1,4 @@
+# async_online_dspark_k8.yaml with a draft-only lr of 1e-4 instead of the inherited policy lr.
+defaults:
+  - async_online_dspark_k8.yaml
+  - draft_optim_lr1e4.yaml

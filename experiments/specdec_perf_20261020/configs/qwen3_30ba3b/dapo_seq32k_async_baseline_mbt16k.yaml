@@ -1,0 +1,6 @@
+# Async 1-off baseline at 32K on DAPO-Math-17k.
+defaults:
+  - seq32k_async_baseline_mbt16k.yaml
+  - dapo.yaml
+checkpointing:
+  enabled: false

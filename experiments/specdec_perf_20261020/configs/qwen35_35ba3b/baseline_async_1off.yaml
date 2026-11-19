@@ -1,0 +1,32 @@
+# Qwen3.5-35B-A3B-Base async-1off baseline, no SpecDec: 2 training nodes (TP2 SP EP8 ETP1) and
+# 2 generation nodes (8 TP1 async vLLM engines, 128 seqs each by vLLM's async default). Mirrors the
+# Q30 async-1off perf recipe.
+defaults: baseline_sync.yaml
+grpo:
+  async_grpo:
+    enabled: true
+    max_trajectory_age_steps: 1
+    in_flight_weight_updates: true
+loss_fn:
+  use_importance_sampling_correction: true
+checkpointing:
+  checkpoint_dir: results/q35-sd1020-async-baseline
+policy:
+  megatron_cfg:
+    expert_model_parallel_size: 8
+  generation:
+    # Same transport as the in-tree Qwen3.5 async recipe; reshards TP2 training weights onto TP1 engines
+    refit_transport: nccl_reshard
+    colocated:
+      enabled: false
+      resources:
+        num_nodes: 2
+        gpus_per_node: 4
+    vllm_cfg:
+      async_engine: true
+      gpu_memory_utilization: 0.8
+logger:
+  wandb:
+    name: q35-sd1020-async-baseline
+cluster:
+  segment_size: 2

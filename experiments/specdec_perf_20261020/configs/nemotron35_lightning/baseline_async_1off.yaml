@@ -1,0 +1,8 @@
+# Async 1-off baseline, no SpecDec: Q30 async-1off perf recipe (2 training nodes at TP1 EP8,
+# 2 generation nodes with 8 TP1 async vLLM engines, 128 seqs each by vLLM's async default) on
+# Nemotron 3.5.
+defaults:
+  - ../../../../examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-async-1off.yaml
+  - nemotron35_model.yaml
+checkpointing:
+  enabled: false

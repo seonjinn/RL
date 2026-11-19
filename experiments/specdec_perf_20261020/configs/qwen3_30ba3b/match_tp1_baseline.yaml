@@ -1,0 +1,4 @@
+# No-SpecDec control for the matched implementation comparison (TP1 EP16, fuse_loss off, warmup 0).
+defaults:
+  - ../../../../examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml
+  - impl_match_tp1.yaml

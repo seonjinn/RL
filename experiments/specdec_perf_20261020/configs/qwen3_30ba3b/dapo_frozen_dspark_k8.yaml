@@ -1,0 +1,6 @@
+# Sync frozen DSpark K=8 on DAPO-Math-17k.
+defaults:
+  - frozen_dspark_k8.yaml
+  - dapo.yaml
+checkpointing:
+  enabled: false

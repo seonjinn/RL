@@ -1,0 +1,51 @@
+# Qwen3.5-35B-A3B-Base sync baseline, 4n4g colocated, no SpecDec. Mirrors the Q30 sync perf recipe
+# (64x32 rollouts, GBS 2048, 16 TP1 vLLM engines, flashinfer_trtllm MoE, CUDA graphs on) on the
+# in-tree Qwen3.5 4n4g training layout (TP2 SP CP1 EP16 ETP1, frozen vision tower). TP2 is also the
+# layout online DFlash/DSpark need, so this baseline serves frozen and online SpecDec arms.
+defaults: ../../../../examples/configs/recipes/llm/grpo-qwen3.5-35ba3b-2n8g-megatron-ep16tp2cp2.yaml
+grpo:
+  num_prompts_per_step: 64
+  num_generations_per_prompt: 32
+loss_fn:
+  force_on_policy_ratio: true
+checkpointing:
+  enabled: false
+  checkpoint_dir: results/q35-sd1020-baseline
+policy:
+  train_global_batch_size: 2048
+  # Qwen3.5 packs sequences inside the model, so each sequence carries the TP2 alignment itself
+  make_sequence_length_divisible_by: 16
+  megatron_cfg:
+    context_parallel_size: 1
+    expert_tensor_parallel_size: 1
+    moe_router_dtype: fp32
+    moe_grouped_gemm: true
+    # The Q30 recipe's HybridEP needs moe_hybridep_prepad_packed_inputs to avoid hangs on uneven
+    # packed inputs, and data.py rejects prepadding for self-packing models, so keep alltoall
+    moe_token_dispatcher_type: alltoall
+    freeze_config:
+      freeze_vision_model: true
+      freeze_vision_projection: true
+      freeze_language_model: false
+    optimizer:
+      lr: 3.0e-07
+      min_lr: 3.0e-08
+    scheduler:
+      lr_warmup_iters: 50
+      lr_warmup_init: 3.0e-08
+    env_vars:
+      PYTORCH_CUDA_ALLOC_CONF: expandable_segments:False
+  generation:
+    vllm_cfg:
+      tensor_parallel_size: 1
+      expert_parallel_size: 1
+      enforce_eager: false
+    vllm_kwargs:
+      moe_backend: flashinfer_trtllm
+logger:
+  wandb:
+    name: q35-sd1020-baseline
+cluster:
+  gpus_per_node: 4
+  num_nodes: 4
+  segment_size: 4

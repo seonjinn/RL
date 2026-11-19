@@ -1,0 +1,12 @@
+# K sweep: sync baseline + frozen NVFP4 DSpark at K=4, trained block 8. 128 seqs/engine, graphs to 640 tokens.
+defaults:
+  - baseline_sync.yaml
+  - spec_frozen_dspark_k8.yaml
+  - ../qwen3_30ba3b/capture_k4_s128.yaml
+policy:
+  generation:
+    vllm_kwargs:
+      speculative_config:
+        num_speculative_tokens: 4
+checkpointing:
+  enabled: false

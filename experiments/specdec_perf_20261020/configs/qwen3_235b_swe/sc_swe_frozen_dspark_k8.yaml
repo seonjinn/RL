@@ -1,0 +1,4 @@
+# V2 (single-controller) variant of swe_frozen_dspark_k8.yaml.
+defaults:
+  - swe_frozen_dspark_k8.yaml
+  - ../qwen3_30ba3b_swe/single_controller.yaml

@@ -1,0 +1,9 @@
+# Ready-first sampler for the V2 SWE arms. Compose it after single_controller.yaml.
+# A step trains on any finished groups, so a slow final eval does not hold the step.
+# ready_first needs a real policy ratio, so the loss computes the previous logprobs.
+async_rl:
+  sampler:
+    name: ready_first
+    max_staleness_versions: 1
+loss_fn:
+  force_on_policy_ratio: false
