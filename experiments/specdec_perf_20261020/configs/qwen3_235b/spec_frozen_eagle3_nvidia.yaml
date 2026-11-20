@@ -1,0 +1,10 @@
+# Frozen public EAGLE-3 drafter for Qwen3-235B-A22B (nvidia/Qwen3-235B-A22B-Eagle3, one layer,
+# aux hidden layers [1, 46, 90]). vLLM speculative_config only, no draft training.
+policy:
+  generation:
+    vllm_kwargs:
+      speculative_config:
+        method: eagle3
+        model: nvidia/Qwen3-235B-A22B-Eagle3
+        num_speculative_tokens: 3
+        draft_tensor_parallel_size: 1

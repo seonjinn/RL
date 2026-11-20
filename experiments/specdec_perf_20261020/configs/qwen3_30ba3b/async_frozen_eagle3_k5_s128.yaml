@@ -1,0 +1,13 @@
+# K sweep: async 1-off recipe + frozen public EAGLE-3 at K=5. 128 seqs/engine, graphs to 768 tokens.
+defaults:
+  - ../../../../examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-async-1off.yaml
+  - spec_frozen_eagle3_redhat.yaml
+  - capture_k5_s128.yaml
+  - async_mbt16k.yaml
+policy:
+  generation:
+    vllm_kwargs:
+      speculative_config:
+        num_speculative_tokens: 5
+checkpointing:
+  enabled: false
