@@ -1,0 +1,5 @@
+# SWE baseline + frozen public NVIDIA Thinking EAGLE-3, K=3, 128 seqs/engine, graphs to 512 tokens.
+defaults:
+  - swe_baseline.yaml
+  - spec_frozen_thinking_eagle3_nvidia.yaml
+  - ../qwen3_30ba3b/capture_k3_s128.yaml

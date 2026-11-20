@@ -1,0 +1,8 @@
+# SWE trajectory ladder step 5 with the public EAGLE-3 K3 drafter: all five trajectory items.
+defaults:
+  - swe_traj_l0_eagle3_k3.yaml
+  - traj_opt_pyc.yaml
+  - traj_opt_least_loaded.yaml
+  - traj_opt_direct_python_alive_poll.yaml
+  - traj_opt_fast_deep_reset.yaml
+  - traj_opt_eval_poll.yaml

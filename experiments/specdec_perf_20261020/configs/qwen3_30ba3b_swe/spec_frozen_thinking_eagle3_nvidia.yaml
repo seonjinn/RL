@@ -1,0 +1,10 @@
+# Frozen public EAGLE-3 drafter for Qwen3-30B-A3B-Thinking-2507 (nvidia/Qwen3-30B-A3B-Thinking-2507-Eagle3).
+# EAGLE-3 is autoregressive, so K is free. K=3 matches the earlier SWE SpecDec gate arm.
+policy:
+  generation:
+    vllm_kwargs:
+      speculative_config:
+        method: eagle3
+        model: nvidia/Qwen3-30B-A3B-Thinking-2507-Eagle3
+        num_speculative_tokens: 3
+        draft_tensor_parallel_size: 1

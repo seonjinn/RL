@@ -1,0 +1,7 @@
+# V2 frozen public EAGLE-3 K3: ready-first sampler, 450 s eval timeout, capped instances dropped.
+defaults:
+  - swe_frozen_thinking_eagle3_k3.yaml
+  - single_controller.yaml
+  - ready_first.yaml
+  - eval_timeout450.yaml
+  - drop_capped_instances.yaml
