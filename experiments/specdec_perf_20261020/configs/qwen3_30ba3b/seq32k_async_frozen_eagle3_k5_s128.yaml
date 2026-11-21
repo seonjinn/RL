@@ -1,0 +1,6 @@
+# Async frozen public EAGLE-3 K=5, 128 seqs/engine, at 32K.
+defaults:
+  - async_frozen_eagle3_k5_s128.yaml
+  - seq32k.yaml
+checkpointing:
+  enabled: false

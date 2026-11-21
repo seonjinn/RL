@@ -1,0 +1,6 @@
+# Sync frozen public EAGLE-3 K=3 at 32K.
+defaults:
+  - frozen_eagle3_k3.yaml
+  - seq32k.yaml
+checkpointing:
+  enabled: false
